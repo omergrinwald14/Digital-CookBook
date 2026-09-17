@@ -69,13 +69,28 @@
       try {
         if (!(await queueShare(url))) await importNow(url);
         statusEl.textContent = "Saved! Opening your cookbook…";
-        // window.close() here is unreliable on installed PWAs: some phones kill
-        // the page but not the window, stranding a dead white screen. Navigating
-        // to the app is predictable everywhere; the queue banner confirms the share.
-        setTimeout(() => { window.location.replace("/"); }, 800);
       } catch (err) {
-        statusEl.textContent = `Could not save: ${err.message}`;
+        // The direct POST failed — offline, or a cold/unreachable server. On
+        // Android the Background Sync path above already queued it, but on
+        // iOS (no Background Sync) this used to be where the share simply
+        // VANISHED: the user saw an error and the link was gone for good.
+        // Park it in IndexedDB instead. app.js drains that queue on every
+        // app open, so the share survives to the next visit either way.
+        try {
+          await enqueueShare(url, OWNER);
+          statusEl.textContent = "Saved to your queue — finishing it now…";
+        } catch {
+          // IndexedDB unavailable too (private browsing). Nothing left to try,
+          // so stay on this page: the link is still in the address bar and the
+          // user can retry rather than being bounced away empty-handed.
+          statusEl.textContent = `Could not save: ${err.message}`;
+          return;
+        }
       }
+      // window.close() here is unreliable on installed PWAs: some phones kill
+      // the page but not the window, stranding a dead white screen. Navigating
+      // to the app is predictable everywhere; the queue banner confirms the share.
+      setTimeout(() => { window.location.replace("/"); }, 1200);
     }
 
     run();

@@ -2,7 +2,7 @@
 importScripts("share-queue.js");
 
 const API_BASE = "https://digital-cookbook-api.onrender.com"; // matches app.js
-const SW_VERSION = "v5 cold-start-retry"; // bump on SW changes; readable at /sw-version
+const SW_VERSION = "v6 drain-all-shares"; // bump on SW changes; readable at /sw-version
 
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
@@ -35,6 +35,7 @@ const RETRY_DELAYS_MS = [0, 30000, 45000];
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
 async function drainShareQueue() {
+  let stuck = 0;
   for (const share of await listShares()) {
     let delivered = false;
     for (const delay of RETRY_DELAYS_MS) {
@@ -60,7 +61,12 @@ async function drainShareQueue() {
         }
       } catch { /* network error — wait, then retry */ }
     }
-    // Still failing after all tries: throw so the browser re-syncs later.
-    if (!delivered) throw new Error("import still failing after retries");
+    // Still failing after all tries: count it, but keep going. Throwing here
+    // abandoned every share further down the queue — one bad entry blocked
+    // all the good ones behind it on this sync AND every sync after it.
+    if (!delivered) stuck++;
   }
+  // Report failure only once the whole queue has had a turn; the throw is what
+  // makes the browser schedule another sync later.
+  if (stuck) throw new Error(`${stuck} share(s) still failing after retries`);
 }

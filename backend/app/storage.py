@@ -251,8 +251,11 @@ def set_recipe_photo(recipe_id: int, content: bytes, content_type: str, *, owner
         file_options={"content-type": content_type, "upsert": "true"},
     )
     url = client.storage.from_("thumbnails").get_public_url(name)
+    # .eq("owner") on the write as well as the check above: the ownership
+    # test and the update are two separate round trips, so the filter is what
+    # actually guarantees we never write to someone else's row.
     result = (client.table("recipes").update({"thumbnail": url})
-              .eq("id", recipe_id).execute())
+              .eq("id", recipe_id).eq("owner", owner).execute())
     return result.data[0]
 
 
@@ -421,26 +424,37 @@ def delete_user(owner: str) -> dict:
     Recipes go first — they reference tags via the FK, so deleting
     tags first would be blocked. Thumbnails in Storage are left behind
     as harmless orphans (stable names, overwritten on any re-import).
+
+    shared_recipes needs explicit cleanup: only its recipe_id column has a
+    cascading FK, so deleting the user's recipes clears the offers they SENT
+    but leaves the offers they RECEIVED pointing at an account that no longer
+    exists — rows nothing would ever delete again.
     """
     client = _client()
+    inbox = (client.table("shared_recipes").delete()
+             .eq("to_owner", owner).execute())
     recipes = client.table("recipes").delete().eq("owner", owner).execute()
     tags = client.table("tags").delete().eq("owner", owner).execute()
     # Registry row last: its FK cascades erase the user from every friends
     # list (theirs and other people's).
     users = client.table("users").delete().eq("email", owner).execute()
     return {"recipes": len(recipes.data), "tags": len(tags.data),
-            "users": len(users.data)}
+            "users": len(users.data), "shares": len(inbox.data)}
 
 
 @_synchronized
-def delete_recipe(recipe_id: int, *, owner: str) -> None:
-    """Delete one of OWNER's recipes by id (someone else's id is a no-op).
+def delete_recipe(recipe_id: int, *, owner: str) -> bool:
+    """Delete one of OWNER's recipes by id; True if a row actually went.
 
     Recipes are leaf rows (nothing references them), so this is a straight
     DELETE — simpler than delete_tag, which first detaches its recipes.
+    Returning the outcome lets the endpoint answer 404 instead of reporting
+    success for an id that never existed (or belongs to someone else).
     """
     client = _client()
-    client.table("recipes").delete().eq("id", recipe_id).eq("owner", owner).execute()
+    result = (client.table("recipes").delete()
+              .eq("id", recipe_id).eq("owner", owner).execute())
+    return bool(result.data)
 
 
 @_synchronized

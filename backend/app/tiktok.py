@@ -68,7 +68,9 @@ def fetch_caption(url: str) -> dict:
 
     Returns:
         A dict with: caption (post description, may be None), title (author
-        display name), thumbnail (cover image URL), and source_url.
+        display name), thumbnail (cover image URL), source_url, and
+        fetch_failed — True only when Apify itself was unreachable (same
+        contract as instagram.py).
     """
     if not APIFY_TOKEN:
         raise RuntimeError("APIFY_TOKEN is missing. Add it to backend/.env")
@@ -80,17 +82,19 @@ def fetch_caption(url: str) -> dict:
             APIFY_URL,
             params={"token": APIFY_TOKEN},
             json=payload,
-            timeout=120,  # the scraper can take a while to spin up
+            timeout=90,  # see instagram.py: Render kills the request at ~100s
         )
         response.raise_for_status()
         items = response.json()
     except requests.RequestException:
-        # Same contract as instagram.py: never crash the import — null fields.
-        return {"caption": None, "title": None, "thumbnail": None, "source_url": url}
+        # Same contract as instagram.py: Apify is down, not the post.
+        return {"caption": None, "title": None, "thumbnail": None,
+                "source_url": url, "fetch_failed": True}
 
     if not items or "error" in items[0]:
         # No data (private/removed post, or the actor reported an error).
-        return {"caption": None, "title": None, "thumbnail": None, "source_url": url}
+        return {"caption": None, "title": None, "thumbnail": None,
+                "source_url": url, "fetch_failed": False}
 
     post = items[0]
     author = post.get("authorMeta") or {}
@@ -100,6 +104,7 @@ def fetch_caption(url: str) -> dict:
         "title": author.get("nickName") or author.get("name"),
         "thumbnail": video.get("coverUrl"),
         "source_url": url,
+        "fetch_failed": False,
     }
 
 

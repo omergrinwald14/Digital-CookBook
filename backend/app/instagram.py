@@ -52,7 +52,9 @@ def fetch_caption(url: str) -> dict:
 
     Returns:
         A dict with: caption (post description, may be None), title, thumbnail
-        (image URL), and source_url (the original link).
+        (image URL), source_url (the original link), and fetch_failed — True
+        only when Apify itself was unreachable, so the caller can tell
+        "the service is down" apart from "this post has no caption".
     """
     if not APIFY_TOKEN:
         raise RuntimeError("APIFY_TOKEN is missing. Add it to backend/.env")
@@ -65,18 +67,26 @@ def fetch_caption(url: str) -> dict:
             APIFY_URL,
             params={"token": APIFY_TOKEN},
             json=payload,
-            timeout=120,  # the scraper can take a while to spin up
+            # 90s, not 120: Render cuts a request off at ~100s, so a longer
+            # timeout here only means the platform kills us before our own
+            # error handling ever gets to run.
+            timeout=90,
         )
         response.raise_for_status()
         items = response.json()
     except requests.RequestException:
-        # Apify unreachable/errored (transient hiccup, cold start, blocked post).
-        # Don't crash the import — save with null fields, same as an empty result.
-        return {"caption": None, "title": None, "thumbnail": None, "source_url": url}
+        # Apify unreachable/errored (outage, quota exhausted, timeout). This is
+        # OUR problem, not the post's — flag it so /import can answer 502 and
+        # let the client retry, instead of silently saving an empty recipe the
+        # user then has to hunt down and delete.
+        return {"caption": None, "title": None, "thumbnail": None,
+                "source_url": url, "fetch_failed": True}
 
     if not items:
-        # No data (e.g. private/removed post) — return nulls, caller decides.
-        return {"caption": None, "title": None, "thumbnail": None, "source_url": url}
+        # No data (e.g. private/removed post). Apify answered fine, the post
+        # just has nothing for us — save it with null fields, as designed.
+        return {"caption": None, "title": None, "thumbnail": None,
+                "source_url": url, "fetch_failed": False}
 
     post = items[0]
     return {
@@ -84,6 +94,7 @@ def fetch_caption(url: str) -> dict:
         "title": post.get("ownerFullName") or post.get("ownerUsername"),
         "thumbnail": post.get("displayUrl"),
         "source_url": url,
+        "fetch_failed": False,
     }
 
 

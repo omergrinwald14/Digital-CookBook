@@ -57,13 +57,18 @@ DEFAULT_OWNER = "omergrinwald14@gmail.com"
 
 
 def current_user(x_user: str = Header(default=DEFAULT_OWNER)) -> str:
-    """The requesting user, from the X-User header.
+    """The requesting user, from the X-User header — trimmed and lowercased.
+
+    Normalizing HERE, at the single seam every endpoint depends on, is the
+    whole point: before this, half the code called .lower() and half didn't,
+    so a header of "Dana@Gmail.com" wrote recipes under one spelling and
+    looked its friends and share offers up under another. One rule, one place.
 
     Missing/blank header falls back to DEFAULT_OWNER so clients that predate
-    login (current frontend, queued shares, iOS Shortcut) keep working during
-    the migration; the default goes away once steps c–e send the header.
+    login (queued shares, iOS Shortcut) keep working during the migration;
+    the default goes away once every client sends the header.
     """
-    return x_user.strip() or DEFAULT_OWNER
+    return x_user.strip().lower() or DEFAULT_OWNER
 
 
 class ImportRequest(BaseModel):
@@ -190,8 +195,14 @@ def upload_photo(recipe_id: int, photo: UploadFile,
     """Attach an uploaded cover photo to one of the caller's recipes."""
     if not (photo.content_type or "").startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image.")
-    content = photo.file.read()
-    if len(content) > 5 * 1024 * 1024:
+    # Check the declared size FIRST. Reading before checking meant a 500 MB
+    # upload was fully buffered into a 512 MB instance's memory just to be
+    # rejected on the next line — the check has to happen before the read.
+    max_bytes = 5 * 1024 * 1024
+    if photo.size is not None and photo.size > max_bytes:
+        raise HTTPException(status_code=400, detail="Image too large (max 5 MB).")
+    content = photo.file.read(max_bytes + 1)   # bounded read, never unbounded
+    if len(content) > max_bytes:
         raise HTTPException(status_code=400, detail="Image too large (max 5 MB).")
     try:
         return set_recipe_photo(recipe_id, content, photo.content_type, owner=user)
@@ -231,7 +242,10 @@ def patch_recipe(
 @app.delete("/recipes/{recipe_id}")
 def remove_recipe(recipe_id: int, user: str = Depends(current_user)) -> dict:
     """Delete one of the caller's recipes by id."""
-    delete_recipe(recipe_id, owner=user)
+    if not delete_recipe(recipe_id, owner=user):
+        # Matches DELETE /tags: an id that isn't ours gets the same 404 as one
+        # that doesn't exist, so the response never confirms someone else's row.
+        raise HTTPException(status_code=404, detail="Recipe not found.")
     return {"status": "deleted", "id": recipe_id}
 
 
@@ -251,7 +265,7 @@ def share_a_recipe(recipe_id: int, body: ShareRequest,
     to = body.to.strip().lower()
     if not to:
         raise HTTPException(status_code=400, detail="Recipient email required.")
-    if to == user.lower():
+    if to == user:
         raise HTTPException(status_code=400,
                             detail="You can't share a recipe with yourself.")
     if not user_exists(to):
@@ -261,21 +275,21 @@ def share_a_recipe(recipe_id: int, body: ShareRequest,
         share = share_recipe(recipe_id, from_owner=user, to_owner=to)
     except LookupError:
         raise HTTPException(status_code=404, detail="Recipe not found.")
-    add_friend(to, owner=user.lower())
+    add_friend(to, owner=user)
     return share
 
 
 @app.get("/shared")
 def get_shares(user: str = Depends(current_user)) -> list[dict]:
     """The caller's inbox: pending share offers with recipe previews."""
-    return list_shares(owner=user.lower())
+    return list_shares(owner=user)
 
 
 @app.post("/shared/{share_id}/accept")
 def accept_share(share_id: int, user: str = Depends(current_user)) -> dict:
     """Copy the offered recipe into the caller's cookbook."""
     try:
-        return resolve_share(share_id, owner=user.lower(), accept=True)
+        return resolve_share(share_id, owner=user, accept=True)
     except LookupError:
         raise HTTPException(status_code=404, detail="Share not found.")
 
@@ -284,7 +298,7 @@ def accept_share(share_id: int, user: str = Depends(current_user)) -> dict:
 def dismiss_share(share_id: int, user: str = Depends(current_user)) -> dict:
     """Decline an offer (it disappears; a re-share revives it)."""
     try:
-        return resolve_share(share_id, owner=user.lower(), accept=False)
+        return resolve_share(share_id, owner=user, accept=False)
     except LookupError:
         raise HTTPException(status_code=404, detail="Share not found.")
 
@@ -297,7 +311,7 @@ class FriendRequest(BaseModel):
 @app.get("/friends")
 def get_friends(user: str = Depends(current_user)) -> list[dict]:
     """The caller's friends list (share address book)."""
-    return list_friends(owner=user.lower())
+    return list_friends(owner=user)
 
 
 @app.post("/friends", status_code=201)
@@ -306,11 +320,11 @@ def add_a_friend(body: FriendRequest, user: str = Depends(current_user)) -> dict
     email = body.email.strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="Email required.")
-    if email == user.lower():
+    if email == user:
         raise HTTPException(status_code=400,
                             detail="You're already you — pick someone else.")
     try:
-        return add_friend(email, owner=user.lower())
+        return add_friend(email, owner=user)
     except LookupError:
         raise HTTPException(status_code=404,
                             detail=f"No user with the email {email}.")
@@ -320,14 +334,14 @@ def add_a_friend(body: FriendRequest, user: str = Depends(current_user)) -> dict
 def remove_a_friend(email: str, user: str = Depends(current_user)) -> dict:
     """Remove a friend from the caller's list."""
     email = email.strip().lower()
-    remove_friend(email, owner=user.lower())
+    remove_friend(email, owner=user)
     return {"status": "deleted", "friend": email}
 
 
 @app.post("/users", status_code=201)
 def add_user(user: str = Depends(current_user)) -> dict:
     """Register the caller in the users registry (called at login)."""
-    return register_user(user.lower())
+    return register_user(user)
 
 
 @app.delete("/users/{email}")
@@ -338,7 +352,7 @@ def remove_user(email: str, user: str = Depends(current_user)) -> dict:
     family member can't wipe another's cookbook (403 otherwise).
     """
     email = email.strip().lower()
-    if email != user.lower():
+    if email != user:
         raise HTTPException(
             status_code=403, detail="You can only delete your own data."
         )
@@ -379,6 +393,16 @@ def import_recipe(body: ImportRequest, user: str = Depends(current_user)) -> dic
         return existing
 
     meta = fetch(url)
+    if meta.get("fetch_failed"):
+        # The scraper was unreachable — a temporary fault on our side, not a
+        # verdict on the post. 502 (not 200-with-empty-fields) tells the
+        # caller "try again": the service worker's queue already retries 5xx,
+        # and the user doesn't end up with a blank recipe to clean up.
+        raise HTTPException(
+            status_code=502,
+            detail="Couldn't reach the video service. Please try again in a minute.",
+        )
+
     tag_names = [t["name"] for t in list_tags(owner=user)]
     recipe = parse_recipe(meta["caption"], tag_names)
 

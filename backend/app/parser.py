@@ -19,6 +19,19 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 MODEL = "gemini-2.5-flash"  # fast, free-tier-friendly model
 
+# Module-level singleton, same reasoning as storage.py's Supabase client:
+# building a fresh client per call re-pays the TLS handshake and connection
+# setup on every import, and throws away the connection afterwards.
+_client_instance = None
+
+
+def _client():
+    """Return the shared Gemini client, creating it once on first use."""
+    global _client_instance
+    if _client_instance is None:
+        _client_instance = genai.Client(api_key=GEMINI_API_KEY)
+    return _client_instance
+
 
 def _build_prompt(caption: str, tags: list[str]) -> str:
     """Construct the instruction we send to Gemini.
@@ -71,8 +84,7 @@ def parse_recipe(caption: str, tags: list[str]) -> dict:
         # No caption to parse → follow the no-tags/null fallback rule.
         return {"title": None, "ingredients": None, "steps": None, "tags": []}
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
-    response = client.models.generate_content(
+    response = _client().models.generate_content(
         model=MODEL,
         contents=_build_prompt(caption, tags),
         config=types.GenerateContentConfig(response_mime_type="application/json"),
