@@ -598,6 +598,60 @@ function renderEditForm(recipe) {
   stepsIn.value = (recipe.steps || []).join("\n");
   field("Steps (one per line)", stepsIn);
 
+  // Photo. Picking a file or hitting Remove only records an INTENT here;
+  // nothing is sent until Save. That is what makes Cancel mean "cancel" —
+  // acting immediately would leave the photo changed on a discarded edit.
+  // The text fields go over PATCH (JSON) while the photo needs its own
+  // multipart request, so one save can be up to two calls.
+  let photoAction = null;                       // null | "replace" | "remove"
+
+  const photoBox = document.createElement("div");
+  photoBox.className = "photo-edit";
+  const preview = document.createElement("img");
+  preview.alt = "";
+  preview.referrerPolicy = "no-referrer";       // Instagram CDN 403s cross-site referers
+  const empty = document.createElement("span");
+  empty.className = "photo-empty";
+  empty.textContent = "No photo";
+  const fileIn = document.createElement("input");
+  fileIn.type = "file";
+  fileIn.accept = "image/*";
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";                    // type=button: do not submit
+  removeBtn.className = "photo-remove";
+
+  // One function paints the whole widget from the current intent, so what you
+  // see can never drift out of step with what Save will actually do.
+  function paintPhoto() {
+    const showing =
+      photoAction === "remove" ? null
+      : photoAction === "replace" ? URL.createObjectURL(fileIn.files[0])
+      : recipe.thumbnail || null;
+    preview.hidden = !showing;
+    if (showing) preview.src = showing;
+    empty.hidden = !!showing;
+    removeBtn.hidden = !showing;
+    removeBtn.textContent = photoAction === "replace" ? "Undo" : "Remove photo";
+  }
+
+  fileIn.addEventListener("change", () => {
+    photoAction = fileIn.files.length ? "replace" : null;
+    paintPhoto();
+  });
+  removeBtn.addEventListener("click", () => {
+    if (photoAction === "replace") {
+      fileIn.value = "";                        // undo the pick, keep the old photo
+      photoAction = null;
+    } else {
+      photoAction = "remove";
+    }
+    paintPhoto();
+  });
+
+  photoBox.append(preview, empty, fileIn, removeBtn);
+  field("Photo", photoBox);
+  paintPhoto();
+
   const buttons = document.createElement("div");
   buttons.className = "edit-buttons";
   const save = document.createElement("button");
