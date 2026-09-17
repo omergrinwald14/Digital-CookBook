@@ -102,3 +102,14 @@ main { padding:1rem; max-width:600px; margin:0 auto; }
 .share-btn { display:inline-flex; align-items:center; gap:.4rem; margin-left:auto; background:var(--accent); color:#fff; border:none; border-radius:999px; padding:.4rem .9rem; font:inherit; font-size:.85rem; font-weight:600; cursor:pointer; }
 .share-btn svg { width:1rem; height:1rem; }
 .share-btn:disabled { opacity:.5; }
+
+/* Photo editor inside the edit form. font-weight:400 undoes the label's bold,
+   which children would otherwise inherit. */
+.photo-edit { display:flex; flex-direction:column; gap:.4rem; font-weight:400; }
+.photo-edit img { width:100%; max-height:180px; object-fit:cover; border-radius:8px; }
+.photo-edit input[type="file"] { font-size:.8rem; }
+.photo-empty { font-size:.8rem; color:#9a8f85; }
+.photo-remove { align-self:flex-start; background:#eee; border:none; border-radius:8px;
+                padding:.3rem .7rem; cursor:pointer; font:inherit; font-size:.8rem; }
+/* [hidden] loses to any display: rule, so restate it for the flex children. */
+.photo-edit [hidden] { display:none; }

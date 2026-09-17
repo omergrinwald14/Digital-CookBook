@@ -620,7 +620,10 @@ function renderEditForm(recipe) {
       steps: toLines(stepsIn.value),
     };
     if (!body.title) { alert("Title cannot be empty."); return; }
+    // Disabling alone looked like nothing happened on a cold server. Say so.
+    const label = save.textContent;
     save.disabled = true;
+    save.textContent = "Saving…";
     try {
       const res = await apiFetch(`/recipes/${recipe.id}`, {
         method: "PATCH",
@@ -629,10 +632,26 @@ function renderEditForm(recipe) {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       Object.assign(recipe, body);              // reflect saved edits locally
+
+      if (photoAction === "replace") {
+        save.textContent = "Uploading photo…";
+        const fd = new FormData();
+        fd.append("photo", fileIn.files[0]);
+        const up = await apiFetch(`/recipes/${recipe.id}/photo`, { method: "POST", body: fd });
+        if (!up.ok) throw new Error(`photo upload failed (HTTP ${up.status})`);
+        recipe.thumbnail = (await up.json()).thumbnail;
+      } else if (photoAction === "remove") {
+        const rm = await apiFetch(`/recipes/${recipe.id}/photo`, { method: "DELETE" });
+        if (!rm.ok) throw new Error(`photo removal failed (HTTP ${rm.status})`);
+        recipe.thumbnail = null;
+      }
       card.replaceWith(renderRecipeCard(recipe));
     } catch (err) {
+      // The text edits may already be saved even if the photo step failed, so
+      // say what went wrong and leave the form open rather than pretending.
       alert(`Could not save: ${err.message}`);
       save.disabled = false;
+      save.textContent = label;
     }
   });
 
@@ -715,7 +734,9 @@ manualForm.addEventListener("submit", async (e) => {
     steps: toLines(document.getElementById("manual-steps").value),
   };
   const save = manualForm.querySelector('button[type="submit"]');
+  const label = save.textContent;
   save.disabled = true;
+  save.textContent = "Saving…";   // a disabled button alone reads as "nothing happened"
   try {
     const res = await apiFetch("/recipes", {
       method: "POST",
@@ -730,6 +751,7 @@ manualForm.addEventListener("submit", async (e) => {
       // header, or the boundary marker is lost and the upload breaks.
       const fd = new FormData();
       fd.append("photo", photo);
+      save.textContent = "Uploading photo…";
       const up = await apiFetch(`/recipes/${rec.id}/photo`, { method: "POST", body: fd });
       if (!up.ok) alert("Recipe saved, but the photo upload failed.");
     }
@@ -742,6 +764,7 @@ manualForm.addEventListener("submit", async (e) => {
     alert(`Could not save: ${err.message}`);
   } finally {
     save.disabled = false;
+    save.textContent = label;
   }
 });
 

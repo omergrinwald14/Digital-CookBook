@@ -16,6 +16,7 @@ from app.tiktok import fetch_caption as fetch_tiktok
 from app.tiktok import normalize_tiktok_url
 from app.storage import (
     add_friend,
+    clear_recipe_photo,
     create_tag,
     delete_recipe,
     delete_tag,
@@ -206,6 +207,15 @@ def upload_photo(recipe_id: int, photo: UploadFile,
         raise HTTPException(status_code=400, detail="Image too large (max 5 MB).")
     try:
         return set_recipe_photo(recipe_id, content, photo.content_type, owner=user)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Recipe not found.")
+
+
+@app.delete("/recipes/{recipe_id}/photo")
+def remove_photo(recipe_id: int, user: str = Depends(current_user)) -> dict:
+    """Remove a recipe's cover photo (the card falls back to no image)."""
+    try:
+        return clear_recipe_photo(recipe_id, owner=user)
     except LookupError:
         raise HTTPException(status_code=404, detail="Recipe not found.")
 

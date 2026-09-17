@@ -113,11 +113,11 @@ def delete_tag(tag_id: int, *, owner: str) -> None:
     """Delete one of OWNER's tags; its recipes fall back to Untagged.
 
     Ownership is checked FIRST — before any mutation — so a wrong/foreign id
-    can't detach another user's recipes (LookupError -> 404 at the endpoint).
-    Then two ordered steps: detach recipes (set tag_id = null) so the
-    foreign key won't block the delete, then remove the tag row. This
-    enforces the plan's "null -> Untagged" rule instead of cascading deletes
-    (which destroy recipes) or failing on the FK constraint.
+    can't delete another user's tag (LookupError -> 404 at the endpoint).
+    Then a single DELETE: the recipe_tags join rows go with it via the FK's
+    ON DELETE CASCADE, and the recipes themselves are untouched, which is
+    what "deleting a tag leaves its recipes Untagged" means. The old manual
+    "detach recipes.tag_id first" step is gone with the column itself (7-11).
     """
     client = _client()
     owned = (
@@ -130,9 +130,6 @@ def delete_tag(tag_id: int, *, owner: str) -> None:
     )
     if not owned.data:
         raise LookupError(f"tag {tag_id} not found")
-    client.table("recipes").update({"tag_id": None}).eq(
-        "tag_id", tag_id
-    ).execute()
     client.table("tags").delete().eq("id", tag_id).execute()
 
 
@@ -256,6 +253,33 @@ def set_recipe_photo(recipe_id: int, content: bytes, content_type: str, *, owner
     # actually guarantees we never write to someone else's row.
     result = (client.table("recipes").update({"thumbnail": url})
               .eq("id", recipe_id).eq("owner", owner).execute())
+    return result.data[0]
+
+
+@_synchronized
+def clear_recipe_photo(recipe_id: int, *, owner: str) -> dict:
+    """Remove OWNER's recipe's cover photo and return the updated row.
+
+    The DB column is always cleared. The stored FILE is only deleted when we
+    uploaded it ourselves (name "manual-<id>", unique to this one recipe).
+    Imported thumbnails are named after a hash of the source URL, so two
+    family members who imported the same reel point at the SAME object —
+    deleting it here would silently blank the other person's card too.
+    """
+    client = _client()
+    found = (client.table("recipes").select("id, thumbnail")
+             .eq("id", recipe_id).eq("owner", owner).limit(1).execute())
+    if not found.data:
+        raise LookupError(f"Recipe {recipe_id} not found")
+    thumbnail = found.data[0].get("thumbnail") or ""
+    result = (client.table("recipes").update({"thumbnail": None})
+              .eq("id", recipe_id).eq("owner", owner).execute())
+    name = f"manual-{recipe_id}"
+    if f"/{name}" in thumbnail:
+        try:
+            client.storage.from_("thumbnails").remove([name])
+        except Exception:
+            pass   # an orphaned file is harmless; a failed cleanup must not 500
     return result.data[0]
 
 
