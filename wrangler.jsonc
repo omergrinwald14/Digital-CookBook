@@ -17,8 +17,12 @@
   // Keep-alive: Render's free tier sleeps a service after 15 minutes idle and
   // takes ~50s to cold-start. Pinging every 14 minutes never lets it sleep.
   // 14, not 15: at exactly 15 the ping races the sleep timer and loses.
+  // Hours 3-21 UTC = 06:00-00:59 Israel time (covers both IST and IDT). Nobody
+  // adds recipes at 3am, and letting it sleep overnight cuts usage from ~744
+  // to ~589 of Render's 750 free instance-hours per month. An off-hours share
+  // still lands: the IndexedDB queue delivers it on the next app open.
   // Cron syntax: minute hour day-of-month month day-of-week (UTC).
   "triggers": {
-    "crons": ["*/14 * * * *"]
+    "crons": ["*/14 3-21 * * *"]
   }
 }
