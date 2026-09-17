@@ -199,6 +199,50 @@ document.getElementById("search-box").addEventListener("input",
 // Split a textarea into trimmed, non-empty lines (edit form + manual entry).
 const toLines = (s) => s.split("\n").map((l) => l.trim()).filter(Boolean);
 
+// A phone camera photo is 3-5 MB, and a recipe card renders it about 400px
+// wide — so we were sending ten times more bytes than anything could ever
+// display, over a link that runs Israel -> Oregon -> Mumbai. Redrawing the
+// image onto a smaller canvas first turns a ~4 MB upload into ~200 KB.
+// Anything unexpected (a format the canvas cannot decode, a browser that
+// refuses toBlob) falls back to the original file: a slow upload beats a
+// failed one.
+const PHOTO_MAX_DIM = 1200;   // plenty for a full-width card on a retina phone
+
+function downscaleImage(file) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, PHOTO_MAX_DIM / Math.max(img.width, img.height));
+      if (scale === 1 && file.size < 400 * 1024) return resolve(file);  // already small
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(
+        (blob) => resolve(blob && blob.size < file.size ? blob : file),
+        "image/jpeg",
+        0.85,
+      );
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.src = url;
+  });
+}
+
+// Resolve only once the browser has actually fetched and decoded `src`.
+// Without this the form closed the moment the upload finished, while the new
+// picture was still downloading — exactly the "it looks done but it is not"
+// gap. Never rejects: a broken image must not fail an otherwise good save.
+function imageReady(src) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = img.onerror = () => resolve();
+    img.src = src;
+  });
+}
+
 // Format one ingredient: "320 g Spaghetti", "2 cloves Garlic", or just
 // "Olive oil" when quantity/unit are null. filter(Boolean) drops the blanks.
 function formatIngredient(ing) {
@@ -526,6 +570,10 @@ function renderRecipeCard(recipe) {
   if (recipe.thumbnail) {
     const img = document.createElement("img");
     img.referrerPolicy = "no-referrer";   // Instagram's CDN 403s cross-site referers
+    // Thumbnails are ~250 KB each and a full list is 30+ cards, so eagerly
+    // loading them all costs several MB before the first card is readable.
+    // lazy = the browser fetches each one as it nears the viewport.
+    img.loading = "lazy";
     img.src = recipe.thumbnail;
     img.alt = recipe.title || "Recipe";
     card.appendChild(img);
@@ -688,12 +736,19 @@ function renderEditForm(recipe) {
       Object.assign(recipe, body);              // reflect saved edits locally
 
       if (photoAction === "replace") {
+        save.textContent = "Shrinking photo…";
+        const blob = await downscaleImage(fileIn.files[0]);
         save.textContent = "Uploading photo…";
         const fd = new FormData();
-        fd.append("photo", fileIn.files[0]);
+        fd.append("photo", blob, fileIn.files[0].name);
         const up = await apiFetch(`/recipes/${recipe.id}/photo`, { method: "POST", body: fd });
         if (!up.ok) throw new Error(`photo upload failed (HTTP ${up.status})`);
-        recipe.thumbnail = (await up.json()).thumbnail;
+        // The stored filename is stable ("manual-<id>"), so the URL does not
+        // change when the picture does. Version it so the card cannot paint
+        // the previous image out of cache.
+        recipe.thumbnail = `${(await up.json()).thumbnail}?v=${Date.now()}`;
+        save.textContent = "Loading photo…";
+        await imageReady(recipe.thumbnail);
       } else if (photoAction === "remove") {
         const rm = await apiFetch(`/recipes/${recipe.id}/photo`, { method: "DELETE" });
         if (!rm.ok) throw new Error(`photo removal failed (HTTP ${rm.status})`);
@@ -803,8 +858,10 @@ manualForm.addEventListener("submit", async (e) => {
     if (photo) {
       // FormData = the browser's multipart encoding; no manual Content-Type
       // header, or the boundary marker is lost and the upload breaks.
+      save.textContent = "Shrinking photo…";
+      const blob = await downscaleImage(photo);
       const fd = new FormData();
-      fd.append("photo", photo);
+      fd.append("photo", blob, photo.name);
       save.textContent = "Uploading photo…";
       const up = await apiFetch(`/recipes/${rec.id}/photo`, { method: "POST", body: fd });
       if (!up.ok) alert("Recipe saved, but the photo upload failed.");
