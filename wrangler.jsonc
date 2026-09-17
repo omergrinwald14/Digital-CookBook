@@ -1,9 +1,24 @@
 {
   // Wrangler config — tells Cloudflare how to deploy the frontend.
-  // No "main" script = an assets-only Worker (a pure static site).
   "name": "digital-cookbook",            // must match the project name in the wizard
   "compatibility_date": "2026-06-30",
+
+  // The Worker script. It serves the site AND runs the keep-alive ping below.
+  "main": "./frontend-worker.js",
+
   "assets": {
-    "directory": "./frontend"            // serve our static frontend/ folder as the web root
+    "directory": "./frontend",           // serve our static frontend/ folder as the web root
+    // Exposes the asset server to the script as env.ASSETS, so the fetch
+    // handler can hand requests straight back to it — same behavior as the
+    // old assets-only Worker, including the .html stripping we rely on.
+    "binding": "ASSETS"
+  },
+
+  // Keep-alive: Render's free tier sleeps a service after 15 minutes idle and
+  // takes ~50s to cold-start. Pinging every 14 minutes never lets it sleep.
+  // 14, not 15: at exactly 15 the ping races the sleep timer and loses.
+  // Cron syntax: minute hour day-of-month month day-of-week (UTC).
+  "triggers": {
+    "crons": ["*/14 * * * *"]
   }
 }
