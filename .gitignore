@@ -17,3 +17,8 @@ Thumbs.db
 
 # Local Claude Code / editor config.
 .claude/
+
+# One-off thumbnail backfill (2026-09-17) and the originals it saved before
+# overwriting. Both are local safety nets, not part of the project.
+backend/backfill_thumbs.py
+backend/backup/
