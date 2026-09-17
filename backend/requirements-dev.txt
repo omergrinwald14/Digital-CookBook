@@ -1,0 +1,6 @@
+# Test-only dependencies. Deliberately NOT in requirements.txt: Render installs
+# that file on every deploy, and the production image has no reason to carry a
+# test runner.
+#   py -m pip install -r requirements-dev.txt
+#   py -m pytest
+pytest

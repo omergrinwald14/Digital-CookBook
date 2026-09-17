@@ -1075,6 +1075,50 @@ document.getElementById("user-menu-switch").addEventListener("click", () => {
   localStorage.removeItem(LIST_CACHE_KEY);   // and their recipes with it
   location.reload();
 });
+
+// 5-3f: erase everything belonging to the signed-in user. The backend refuses
+// to delete anyone else (403 unless X-User matches), so the damage is bounded
+// to the person clicking — but for them it is total and there is no undo.
+//
+// Hence two gates, not one: a confirm() that states the consequence, then
+// typing the address out in full. A second "are you sure?" trains people to
+// click through; retyping the address cannot be done by reflex.
+const deleteBtn = document.getElementById("user-menu-delete");
+deleteBtn.addEventListener("click", async () => {
+  const email = localStorage.getItem(USER_KEY);
+  const count = recipesCache.length;
+  if (!confirm(
+    `Delete EVERYTHING in ${email}'s cookbook?
+
+` +
+    `${count} recipe(s), all tags, and every recipe shared with you.
+
+` +
+    `This cannot be undone.`
+  )) return;
+  const typed = prompt(`To confirm, type the address:
+${email}`);
+  if (typed === null) return;                       // cancelled at the prompt
+  if (typed.trim().toLowerCase() !== email) {
+    alert("That does not match — nothing was deleted.");
+    return;
+  }
+  deleteBtn.disabled = true;
+  deleteBtn.textContent = "Deleting…";
+  try {
+    const res = await apiFetch(`/users/${encodeURIComponent(email)}`, { method: "DELETE" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const out = await res.json();
+    localStorage.removeItem(USER_KEY);
+    localStorage.removeItem(LIST_CACHE_KEY);
+    alert(`Deleted ${out.recipes} recipe(s) and ${out.tags} tag(s). Goodbye!`);
+    location.reload();                              // back to the login screen
+  } catch (err) {
+    alert(`Could not delete: ${err.message}`);
+    deleteBtn.disabled = false;
+    deleteBtn.textContent = "Delete my cookbook";
+  }
+});
 // Tap anywhere outside the menu closes it.
 document.addEventListener("click", (e) => {
   if (!userMenu.hidden && !userMenu.contains(e.target)) userMenu.hidden = true;

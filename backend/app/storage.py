@@ -358,17 +358,29 @@ def find_recipe_by_url(source_url: str, *, owner: str) -> dict | None:
     their own cookbook. Lets /import short-circuit on a known duplicate BEFORE
     paying for the Apify fetch + Gemini parse (save_recipe also uses it as a
     last-line guard).
+
+    Carries "tags" like every other recipe-returning function: /import hands
+    this row straight back when it recognises a URL, and a caller should not
+    have to know whether a recipe was freshly imported or recognised in order
+    to know whether it can read .tags.
     """
     client = _client()
     result = (
         client.table("recipes")
-        .select("*")
+        .select("*, recipe_tags(tags(id, name))")
         .eq("source_url", source_url)
         .eq("owner", owner)
         .limit(1)
         .execute()
     )
-    return result.data[0] if result.data else None
+    if not result.data:
+        return None
+    row = result.data[0]
+    row["tags"] = sorted(
+        (rt["tags"] for rt in row.pop("recipe_tags", []) if rt.get("tags")),
+        key=lambda t: t["name"],
+    )
+    return row
 
 
 @_synchronized
@@ -411,6 +423,12 @@ def save_recipe(recipe: dict, *, owner: str) -> dict:
                 for tid in dict.fromkeys(found.values())]
     if tag_rows:
         client.table("recipe_tags").insert(tag_rows).execute()
+    # Same "tags" shape as list_recipes and find_recipe_by_url — we already
+    # know exactly which names resolved, so reporting them costs no query.
+    stored["tags"] = sorted(
+        ({"id": tid, "name": name} for name, tid in found.items()),
+        key=lambda t: t["name"],
+    )
     return stored
 
 
