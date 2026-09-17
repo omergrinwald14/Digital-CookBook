@@ -7,11 +7,14 @@ runs server-side only and bypasses Row Level Security.
 
 import functools
 import hashlib
+import io
 import os
 import threading
+import time
 from pathlib import Path
 
 import requests
+from PIL import Image, ImageOps
 from dotenv import load_dotenv
 from supabase import Client, create_client
 
@@ -200,6 +203,43 @@ def list_recipes(
     return recipes
 
 
+# Cards render 220-400px wide and crop to a 160px strip, so 800px is already
+# more than a retina phone can show. Quality 82 is the usual "can't tell the
+# difference" point for photos.
+THUMB_MAX_DIM = 800
+THUMB_QUALITY = 82
+
+# A year. Safe because every stored URL is stable for its content: imported
+# files are named after a hash of the source post, and uploaded ones carry a
+# ?v= stamp that changes whenever the picture does. Supabase's default is
+# no-cache, which made every card revalidate against Mumbai on every load.
+THUMB_CACHE_SECONDS = "31536000"
+
+
+def _shrink_image(data: bytes, content_type: str) -> tuple[bytes, str]:
+    """Re-encode an image down to THUMB_MAX_DIM as JPEG.
+
+    Returns (bytes, content_type) — the ORIGINAL pair if anything goes wrong
+    or if shrinking wouldn't help. Storing a needlessly large picture is a
+    performance problem; failing an import over one is a correctness problem,
+    so every error here falls back rather than raises.
+    """
+    try:
+        img = Image.open(io.BytesIO(data))
+        img = ImageOps.exif_transpose(img)     # honour the phone's rotation flag
+        img.thumbnail((THUMB_MAX_DIM, THUMB_MAX_DIM))   # in place, keeps aspect
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")           # JPEG has no alpha channel
+        buf = io.BytesIO()
+        img.save(buf, "JPEG", quality=THUMB_QUALITY, optimize=True)
+        shrunk = buf.getvalue()
+        if len(shrunk) < len(data):
+            return shrunk, "image/jpeg"
+    except Exception:
+        pass        # unreadable or exotic format — keep what we were given
+    return data, content_type
+
+
 def store_thumbnail(source_url: str, thumbnail_url: str | None) -> str | None:
     """Copy an Instagram thumbnail into our own Supabase Storage bucket.
 
@@ -216,14 +256,18 @@ def store_thumbnail(source_url: str, thumbnail_url: str | None) -> str | None:
     try:
         image = requests.get(thumbnail_url, timeout=30)
         image.raise_for_status()
+        # Shrink before storing: this is the one moment the bytes are already
+        # in memory, and the result is written once but read on every list load.
+        content, content_type = _shrink_image(image.content, "image/jpeg")
         # Stable filename per post: re-importing overwrites instead of piling up.
         name = hashlib.md5(source_url.encode()).hexdigest() + ".jpg"
         with _lock:
             client = _client()
             client.storage.from_("thumbnails").upload(
                 name,
-                image.content,
-                file_options={"content-type": "image/jpeg", "upsert": "true"},
+                content,
+                file_options={"content-type": content_type, "upsert": "true",
+                              "cache-control": THUMB_CACHE_SECONDS},
             )
             return client.storage.from_("thumbnails").get_public_url(name)
     except Exception:
@@ -243,11 +287,19 @@ def set_recipe_photo(recipe_id: int, content: bytes, content_type: str, *, owner
     if not found.data:
         raise LookupError(f"Recipe {recipe_id} not found")
     name = f"manual-{recipe_id}"
+    # The browser already downscales before sending, but the API is public and
+    # the iOS Shortcut is not a browser — so enforce it here too.
+    content, content_type = _shrink_image(content, content_type)
     client.storage.from_("thumbnails").upload(
         name, content,
-        file_options={"content-type": content_type, "upsert": "true"},
+        file_options={"content-type": content_type, "upsert": "true",
+                      "cache-control": THUMB_CACHE_SECONDS},
     )
+    # The filename is stable, so replacing a photo does NOT change the URL —
+    # and with a year-long cache that would pin the old picture on every
+    # client. The stamp makes each replacement its own cacheable URL.
     url = client.storage.from_("thumbnails").get_public_url(name)
+    url += ("&" if "?" in url else "?") + f"v={int(time.time())}"
     # .eq("owner") on the write as well as the check above: the ownership
     # test and the update are two separate round trips, so the filter is what
     # actually guarantees we never write to someone else's row.

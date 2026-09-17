@@ -19,3 +19,8 @@ supabase
 
 # FastAPI's parser for multipart form data (browser file uploads).
 python-multipart
+
+# Resizes images before we store them. Instagram's originals are ~250 KB each
+# and a recipe card renders 220-400px wide, so every list load was paying for
+# roughly six times the pixels it could show.
+Pillow

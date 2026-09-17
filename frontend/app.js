@@ -743,10 +743,10 @@ function renderEditForm(recipe) {
         fd.append("photo", blob, fileIn.files[0].name);
         const up = await apiFetch(`/recipes/${recipe.id}/photo`, { method: "POST", body: fd });
         if (!up.ok) throw new Error(`photo upload failed (HTTP ${up.status})`);
-        // The stored filename is stable ("manual-<id>"), so the URL does not
-        // change when the picture does. Version it so the card cannot paint
-        // the previous image out of cache.
-        recipe.thumbnail = `${(await up.json()).thumbnail}?v=${Date.now()}`;
+        // The URL the server returns already carries its own ?v= stamp (the
+        // stored filename is stable, so replacing a photo would otherwise
+        // reuse the cached image), so take it as given.
+        recipe.thumbnail = (await up.json()).thumbnail;
         save.textContent = "Loading photo…";
         await imageReady(recipe.thumbnail);
       } else if (photoAction === "remove") {
