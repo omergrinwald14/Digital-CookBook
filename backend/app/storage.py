@@ -56,24 +56,40 @@ def _synchronized(fn):
     return wrapper
 
 
-def _tag_id(client: Client, name: str | None, owner: str) -> int | None:
-    """Map OWNER's tag NAME to its id. Returns None for Untagged/no match.
+# Reserved filter values, never real tags: they mean "no tag" to the frontend,
+# so they must not resolve to a row even if someone creates one by that name.
+RESERVED_TAG_NAMES = ("Untagged", "Unknown")
+
+
+def _tag_ids(client: Client, names, owner: str) -> dict[str, int]:
+    """Map several of OWNER's tag NAMES to their ids in ONE query.
 
     Owner-scoped: two users can each have a "Pasta" with different ids.
-    This enforces the "null -> Untagged" rule at the database boundary.
-    "Unknown" stays reserved too until the parser emits tags (7-10).
+    Names that do not exist are simply absent from the result, which is how
+    the "null -> Untagged" rule is enforced at the database boundary.
+
+    One query, not one per name: every round trip crosses from Oregon to
+    Mumbai, so a two-tag save was paying half a second just to look up ids
+    it could have fetched together.
     """
-    if not name or name in ("Untagged", "Unknown"):
-        return None
-    result = (
+    wanted = [n for n in dict.fromkeys(names or [])
+              if n and n not in RESERVED_TAG_NAMES]
+    if not wanted:
+        return {}      # .in_(..., []) is an error in PostgREST — short-circuit
+    rows = (
         client.table("tags")
-        .select("id")
-        .eq("name", name)
+        .select("id, name")
         .eq("owner", owner)
-        .limit(1)
+        .in_("name", wanted)
         .execute()
-    )
-    return result.data[0]["id"] if result.data else None
+    ).data
+    return {r["name"]: r["id"] for r in rows}
+
+
+def _tag_id(client: Client, name: str | None, owner: str) -> int | None:
+    """Map ONE of OWNER's tag names to its id, or None. Thin wrapper on
+    _tag_ids so there is a single definition of how a name resolves."""
+    return _tag_ids(client, [name], owner).get(name)
 
 
 @_synchronized
@@ -167,12 +183,11 @@ def list_recipes(
         # Two-step filter: names -> tag ids -> recipe ids. A filtered !inner
         # embed would hide the recipe's OTHER tags in the response, so plain
         # queries + Python beat one clever query here.
-        tag_ids = set()
-        for name in tags:
-            tid = _tag_id(client, name, owner)
-            if tid is None:
-                return []      # unknown tag name -> nothing can match ALL
-            tag_ids.add(tid)
+        wanted = list(dict.fromkeys(tags))
+        found = _tag_ids(client, wanted, owner)
+        if len(found) != len(wanted):
+            return []          # an unknown tag name -> nothing can match ALL
+        tag_ids = set(found.values())
         rows = (
             client.table("recipe_tags")
             .select("recipe_id, tag_id")
@@ -391,12 +406,9 @@ def save_recipe(recipe: dict, *, owner: str) -> dict:
     stored = result.data[0]
     # Tags land ONLY in the join table now (7-10); recipes.tag_id is dead
     # weight until 7-11 drops it. Unknown names and repeats drop out.
-    tag_rows, seen = [], set()
-    for name in recipe.get("tags") or []:
-        tid = _tag_id(client, name, owner)
-        if tid is not None and tid not in seen:
-            seen.add(tid)
-            tag_rows.append({"recipe_id": stored["id"], "tag_id": tid})
+    found = _tag_ids(client, recipe.get("tags"), owner)
+    tag_rows = [{"recipe_id": stored["id"], "tag_id": tid}
+                for tid in dict.fromkeys(found.values())]
     if tag_rows:
         client.table("recipe_tags").insert(tag_rows).execute()
     return stored
@@ -469,12 +481,9 @@ def update_recipe(
         # Full replacement: swap ALL of this recipe's join rows for the new
         # set. Names are resolved per owner; unknowns and repeats drop out.
         client.table("recipe_tags").delete().eq("recipe_id", recipe_id).execute()
-        tag_rows, seen = [], set()
-        for name in tags:
-            tid = _tag_id(client, name, owner)
-            if tid is not None and tid not in seen:
-                seen.add(tid)
-                tag_rows.append({"recipe_id": recipe_id, "tag_id": tid})
+        found = _tag_ids(client, tags, owner)
+        tag_rows = [{"recipe_id": recipe_id, "tag_id": tid}
+                    for tid in dict.fromkeys(found.values())]
         if tag_rows:
             client.table("recipe_tags").insert(tag_rows).execute()
 
