@@ -28,6 +28,43 @@ let tagsCache = [];
 // so it stays instant even when the backend is cold.
 let recipesCache = [];
 
+// The same list, mirrored into localStorage so a return visit can paint
+// immediately instead of staring at "Loading…" for the second it takes to
+// reach Oregon and Mumbai. This does not make the network faster; it takes
+// the network off the critical path of opening the app.
+//
+// The cached copy is only ever a first draft: a real fetch always follows and
+// repaints. Only the UNFILTERED list is cached — that is the one the app opens
+// with, and caching every filter combination would multiply the storage for a
+// view the user explicitly asked for and is already expecting to wait on.
+const LIST_CACHE_KEY = "cookbook-recipes";
+
+function readListCache() {
+  try {
+    const { user, recipes } = JSON.parse(localStorage.getItem(LIST_CACHE_KEY));
+    // Stamped with its owner: after a user switch the previous person's
+    // cookbook must never flash up, even for a moment.
+    return user === localStorage.getItem(USER_KEY) && Array.isArray(recipes)
+      ? recipes : null;
+  } catch {
+    return null;    // absent, corrupt, or storage blocked — all mean "no cache"
+  }
+}
+
+function writeListCache(recipes) {
+  try {
+    localStorage.setItem(LIST_CACHE_KEY, JSON.stringify({
+      user: localStorage.getItem(USER_KEY), recipes,
+    }));
+  } catch { /* quota exceeded or private mode — the cache is optional */ }
+}
+
+// Called after any in-place edit to recipesCache, so a change the user just
+// made cannot reappear undone on the next open.
+function persistList() {
+  if (!currentFilter.tags && !currentFilter.collection) writeListCache(recipesCache);
+}
+
 // The server-side filter behind the current list, remembered so widgets can
 // re-apply it after changing a recipe (e.g. untagging while filtered).
 let currentFilter = { tags: null, collection: null };
@@ -152,7 +189,14 @@ async function loadTags() {
 async function loadRecipes(tags = null, collection = null) {
   currentFilter = { tags, collection };
   const container = document.getElementById("recipe-list");
-  container.textContent = "Loading…";
+  const unfiltered = !tags && !collection;
+  const cached = unfiltered ? readListCache() : null;
+  if (cached) {
+    recipesCache = cached;
+    renderRecipes(applySearch(recipesCache));   // instant, from the last visit
+  } else {
+    container.textContent = "Loading…";
+  }
   try {
     // Build an encoded query string; filter by tags OR collection.
     const params = new URLSearchParams();
@@ -162,9 +206,12 @@ async function loadRecipes(tags = null, collection = null) {
     const res = await apiFetch(`/recipes${qs ? `?${qs}` : ""}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     recipesCache = await res.json();
+    if (unfiltered) writeListCache(recipesCache);
     renderRecipes(applySearch(recipesCache));
   } catch (err) {
-    container.textContent = `Could not load recipes: ${err.message}`;
+    // With a cached list already on screen, showing an error instead would
+    // trade real (if slightly stale) recipes for nothing. Leave them up.
+    if (!cached) container.textContent = `Could not load recipes: ${err.message}`;
   }
 }
 
@@ -314,6 +361,7 @@ function makeFlagToggle(recipe, key, onGlyph, offGlyph, label) {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       recipe[key] = !recipe[key];          // reflect new state locally
+      persistList();
       render();
     } catch (err) {
       alert(`Could not update: ${err.message}`);
@@ -344,6 +392,7 @@ function renderTagChips(recipe) {
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     recipe.tags = (await res.json()).tags;
+    persistList();
     // A tag change can add/remove this card from a tag-filtered view (incl.
     // "Untagged"), so refetch the list; otherwise repaint just this widget.
     if (currentFilter.tags?.length) {
@@ -549,6 +598,8 @@ function renderRecipeCard(recipe) {
     try {
       const res = await apiFetch(`/recipes/${recipe.id}`, { method: "DELETE" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      recipesCache = recipesCache.filter((r) => r.id !== recipe.id);
+      persistList();
       card.remove();                           // drop just this card from the view
     } catch (err) {
       alert(`Could not delete: ${err.message}`);
@@ -754,6 +805,7 @@ function renderEditForm(recipe) {
         if (!rm.ok) throw new Error(`photo removal failed (HTTP ${rm.status})`);
         recipe.thumbnail = null;
       }
+      persistList();
       card.replaceWith(renderRecipeCard(recipe));
     } catch (err) {
       // The text edits may already be saved even if the photo step failed, so
@@ -1020,6 +1072,7 @@ userBadge.addEventListener("click", (e) => {
 });
 document.getElementById("user-menu-switch").addEventListener("click", () => {
   localStorage.removeItem(USER_KEY);         // clear identity, start over
+  localStorage.removeItem(LIST_CACHE_KEY);   // and their recipes with it
   location.reload();
 });
 // Tap anywhere outside the menu closes it.
