@@ -22,3 +22,5 @@ Thumbs.db
 # overwriting. Both are local safety nets, not part of the project.
 backend/backfill_thumbs.py
 backend/backup/
+# One-off Frankfurt migration helpers (2026-09) — local tools, not the project.
+backend/migrate/
