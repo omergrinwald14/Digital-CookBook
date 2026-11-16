@@ -290,6 +290,92 @@ function imageReady(src) {
   });
 }
 
+// Photo field shared by the create form and the edit form: a preview plus
+// "Take photo" / "Choose photo" / remove. It only records an INTENT —
+// `action` is null (leave as is), "replace" (with `file`) or "remove" — and
+// the form that owns it decides what to send on Save. That is what makes
+// Cancel mean "cancel".
+//
+// Camera vs gallery is one HTML attribute: a file input with `capture` opens
+// the phone's camera directly, one without opens the gallery/file chooser.
+// So: two hidden inputs, each behind its own visible button.
+function makePhotoField(currentUrl = null) {
+  let action = null;
+  let file = null;
+  let objectUrl = null;                         // preview of a picked file
+
+  const box = document.createElement("div");
+  box.className = "photo-edit";
+  const preview = document.createElement("img");
+  preview.alt = "";
+  preview.referrerPolicy = "no-referrer";       // Instagram CDN 403s cross-site referers
+  const empty = document.createElement("span");
+  empty.className = "photo-empty";
+  empty.textContent = "No photo";
+  const buttons = document.createElement("div");
+  buttons.className = "photo-buttons";
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";                    // type=button: do not submit
+  removeBtn.className = "photo-remove";
+
+  // One function paints the whole widget from the current intent, so what you
+  // see can never drift out of step with what Save will actually do.
+  function paint() {
+    if (objectUrl) { URL.revokeObjectURL(objectUrl); objectUrl = null; }
+    if (action === "replace") objectUrl = URL.createObjectURL(file);
+    const showing = action === "remove" ? null : objectUrl || currentUrl;
+    preview.hidden = !showing;
+    if (showing) preview.src = showing;
+    empty.hidden = !!showing;
+    removeBtn.hidden = !showing;
+    removeBtn.textContent = action === "replace" ? "Undo" : "Remove photo";
+  }
+
+  function addSource(label, useCamera) {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.hidden = true;
+    if (useCamera) input.setAttribute("capture", "environment");  // rear camera
+    input.addEventListener("change", () => {
+      if (input.files[0]) {
+        file = input.files[0];
+        action = "replace";
+        paint();
+      }
+      input.value = "";     // so picking the very same file again still fires
+    });
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = label;
+    btn.addEventListener("click", () => input.click());
+    buttons.append(btn, input);
+  }
+  // `capture` is ignored on a laptop (it would just open the same file
+  // dialog twice), so only offer the camera on touch devices.
+  if (window.matchMedia("(pointer: coarse)").matches) addSource("📷 Take photo", true);
+  addSource("🖼 Choose photo", false);
+
+  removeBtn.addEventListener("click", () => {
+    if (action === "replace") {
+      action = null;                            // undo the pick, keep the old photo
+      file = null;
+    } else {
+      action = "remove";
+    }
+    paint();
+  });
+
+  box.append(preview, empty, buttons, removeBtn);
+  paint();
+  return {
+    el: box,
+    get action() { return action; },
+    get file() { return file; },
+    reset() { action = null; file = null; paint(); },
+  };
+}
+
 // Format one ingredient: "320 g Spaghetti", "2 cloves Garlic", or just
 // "Olive oil" when quantity/unit are null. filter(Boolean) drops the blanks.
 function formatIngredient(ing) {
@@ -297,23 +383,25 @@ function formatIngredient(ing) {
 }
 
 // Build the collapsible details (ingredients + steps) for a recipe.
-function renderDetails(recipe) {
+function renderDetails(recipe, { cookButton = true } = {}) {
   const details = document.createElement("div");
   details.className = "recipe-details";
   details.hidden = true; // collapsed until the card is clicked
+
+  // First thing in the opened card: the one action you opened it for.
+  if (cookButton && recipe.steps?.length) details.appendChild(makeCookButton(recipe));
 
   const ingTitle = document.createElement("h4");
   ingTitle.textContent = "Ingredients";
   details.appendChild(ingTitle);
   if (recipe.ingredients?.length) {
-    const ul = document.createElement("ul");
-    for (const ing of recipe.ingredients) {
-      const li = document.createElement("li");
-      li.textContent = formatIngredient(ing);
-      li.dir = "auto";                 // Hebrew -> RTL, English -> LTR (per item)
-      ul.appendChild(li);
-    }
-    details.appendChild(ul);
+    // Tappable list + its WhatsApp/Copy bar — both live in shopping.js.
+    const hint = document.createElement("p");
+    hint.className = "ingredient-hint";
+    hint.textContent = "Tap what you're missing to build a shopping list.";
+    details.appendChild(hint);
+    details.appendChild(renderIngredientList(recipe));
+    details.appendChild(renderShoppingBar(() => [recipe]));
   } else {
     const p = document.createElement("p");
     p.textContent = "No ingredients listed.";
@@ -601,6 +689,10 @@ function renderRecipeCard(recipe) {
       recipesCache = recipesCache.filter((r) => r.id !== recipe.id);
       persistList();
       card.remove();                           // drop just this card from the view
+      // The database drops it from every meal by itself (FK cascade); mirror
+      // that in the in-memory meals so the Meals tab doesn't show a ghost.
+      for (const m of mealsCache) m.recipes = m.recipes.filter((r) => r.id !== recipe.id);
+      mealsChanged();
     } catch (err) {
       alert(`Could not delete: ${err.message}`);
       del.disabled = false;
@@ -641,6 +733,7 @@ function renderRecipeCard(recipe) {
   tools.className = "recipe-tools";
   tools.appendChild(makeFlagToggle(recipe, "is_favorite", "★", "☆", "Favorites"));
   tools.appendChild(makeFlagToggle(recipe, "is_up_next", "🔖", "🔖", "Up Next"));
+  tools.appendChild(makeMealButton(recipe));        // meals.js
   tools.appendChild(makeShareButton(recipe));
   card.appendChild(tools);
 
@@ -672,8 +765,9 @@ function renderEditForm(recipe) {
   form.className = "edit-form";
 
   // Small helper: a labelled field, so the form reads top-to-bottom.
-  function field(labelText, el) {
-    const label = document.createElement("label");
+  function field(labelText, el, tag = "label") {
+    const label = document.createElement(tag);
+    label.className = "field";
     label.textContent = labelText;
     label.appendChild(el);
     form.appendChild(label);
@@ -697,59 +791,13 @@ function renderEditForm(recipe) {
   stepsIn.value = (recipe.steps || []).join("\n");
   field("Steps (one per line)", stepsIn);
 
-  // Photo. Picking a file or hitting Remove only records an INTENT here;
-  // nothing is sent until Save. That is what makes Cancel mean "cancel" —
-  // acting immediately would leave the photo changed on a discarded edit.
+  // Photo: the widget only records an intent; nothing is sent until Save.
   // The text fields go over PATCH (JSON) while the photo needs its own
   // multipart request, so one save can be up to two calls.
-  let photoAction = null;                       // null | "replace" | "remove"
-
-  const photoBox = document.createElement("div");
-  photoBox.className = "photo-edit";
-  const preview = document.createElement("img");
-  preview.alt = "";
-  preview.referrerPolicy = "no-referrer";       // Instagram CDN 403s cross-site referers
-  const empty = document.createElement("span");
-  empty.className = "photo-empty";
-  empty.textContent = "No photo";
-  const fileIn = document.createElement("input");
-  fileIn.type = "file";
-  fileIn.accept = "image/*";
-  const removeBtn = document.createElement("button");
-  removeBtn.type = "button";                    // type=button: do not submit
-  removeBtn.className = "photo-remove";
-
-  // One function paints the whole widget from the current intent, so what you
-  // see can never drift out of step with what Save will actually do.
-  function paintPhoto() {
-    const showing =
-      photoAction === "remove" ? null
-      : photoAction === "replace" ? URL.createObjectURL(fileIn.files[0])
-      : recipe.thumbnail || null;
-    preview.hidden = !showing;
-    if (showing) preview.src = showing;
-    empty.hidden = !!showing;
-    removeBtn.hidden = !showing;
-    removeBtn.textContent = photoAction === "replace" ? "Undo" : "Remove photo";
-  }
-
-  fileIn.addEventListener("change", () => {
-    photoAction = fileIn.files.length ? "replace" : null;
-    paintPhoto();
-  });
-  removeBtn.addEventListener("click", () => {
-    if (photoAction === "replace") {
-      fileIn.value = "";                        // undo the pick, keep the old photo
-      photoAction = null;
-    } else {
-      photoAction = "remove";
-    }
-    paintPhoto();
-  });
-
-  photoBox.append(preview, empty, fileIn, removeBtn);
-  field("Photo", photoBox);
-  paintPhoto();
+  // "div", not the default label: clicking a label's text "clicks" the first
+  // button inside it, which here would pop the camera open.
+  const photo = makePhotoField(recipe.thumbnail || null);
+  field("Photo", photo.el, "div");
 
   const buttons = document.createElement("div");
   buttons.className = "edit-buttons";
@@ -786,12 +834,12 @@ function renderEditForm(recipe) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       Object.assign(recipe, body);              // reflect saved edits locally
 
-      if (photoAction === "replace") {
+      if (photo.action === "replace") {
         save.textContent = "Shrinking photo…";
-        const blob = await downscaleImage(fileIn.files[0]);
+        const blob = await downscaleImage(photo.file);
         save.textContent = "Uploading photo…";
         const fd = new FormData();
-        fd.append("photo", blob, fileIn.files[0].name);
+        fd.append("photo", blob, photo.file.name);
         const up = await apiFetch(`/recipes/${recipe.id}/photo`, { method: "POST", body: fd });
         if (!up.ok) throw new Error(`photo upload failed (HTTP ${up.status})`);
         // The URL the server returns already carries its own ?v= stamp (the
@@ -800,7 +848,7 @@ function renderEditForm(recipe) {
         recipe.thumbnail = (await up.json()).thumbnail;
         save.textContent = "Loading photo…";
         await imageReady(recipe.thumbnail);
-      } else if (photoAction === "remove") {
+      } else if (photo.action === "remove") {
         const rm = await apiFetch(`/recipes/${recipe.id}/photo`, { method: "DELETE" });
         if (!rm.ok) throw new Error(`photo removal failed (HTTP ${rm.status})`);
         recipe.thumbnail = null;
@@ -876,11 +924,15 @@ document.getElementById("import-form").addEventListener("submit", importRecipe);
 
 // Manual entry (8-2): the toggle reveals a form; submit POSTs /recipes.
 const manualForm = document.getElementById("manual-form");
+// The same camera/gallery widget as the edit form, mounted into the static form.
+const manualPhoto = makePhotoField();
+document.getElementById("manual-photo-box").appendChild(manualPhoto.el);
 document.getElementById("manual-toggle").addEventListener("click", () => {
   manualForm.hidden = !manualForm.hidden;
 });
 document.getElementById("manual-cancel").addEventListener("click", () => {
   manualForm.reset();
+  manualPhoto.reset();      // form.reset() only knows about real form fields
   manualForm.hidden = true;
 });
 manualForm.addEventListener("submit", async (e) => {
@@ -906,7 +958,7 @@ manualForm.addEventListener("submit", async (e) => {
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const rec = await res.json();
-    const photo = document.getElementById("manual-photo").files[0];
+    const photo = manualPhoto.file;
     if (photo) {
       // FormData = the browser's multipart encoding; no manual Content-Type
       // header, or the boundary marker is lost and the upload breaks.
@@ -919,6 +971,7 @@ manualForm.addEventListener("submit", async (e) => {
       if (!up.ok) alert("Recipe saved, but the photo upload failed.");
     }
     manualForm.reset();
+    manualPhoto.reset();
     manualForm.hidden = true;
     status.hidden = false;
     status.textContent = `Added: ${title}`;
@@ -1045,6 +1098,7 @@ async function drainPendingShares() {
 // immediately.
 function boot() {
   loadTags().then(loadRecipes).then(drainPendingShares).then(loadSharedInbox);
+  loadMeals();   // independent of the chain above; fills the Meals tab + 🍽 buttons
 }
 
 // Login gate (5-3c): with a stored identity, boot straight in; without one,

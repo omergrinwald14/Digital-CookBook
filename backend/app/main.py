@@ -16,18 +16,24 @@ from app.tiktok import fetch_caption as fetch_tiktok
 from app.tiktok import normalize_tiktok_url
 from app.storage import (
     add_friend,
+    add_meal_recipe,
     clear_recipe_photo,
+    create_meal,
     create_tag,
+    delete_meal,
     delete_recipe,
     delete_tag,
     delete_user,
     find_recipe_by_url,
     list_friends,
+    list_meals,
     list_recipes,
     list_shares,
     list_tags,
     register_user,
     remove_friend,
+    remove_meal_recipe,
+    rename_meal,
     resolve_share,
     save_recipe,
     set_recipe_photo,
@@ -346,6 +352,74 @@ def remove_a_friend(email: str, user: str = Depends(current_user)) -> dict:
     email = email.strip().lower()
     remove_friend(email, owner=user)
     return {"status": "deleted", "friend": email}
+
+
+class MealRequest(BaseModel):
+    """Body for POST /meals and PATCH /meals/{id} — the meal's name."""
+    name: str
+
+
+def _meal_name(body: MealRequest) -> str:
+    """Trimmed, non-empty meal name — one validation rule for create + rename."""
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Meal name cannot be empty.")
+    return name
+
+
+@app.get("/meals")
+def get_meals(user: str = Depends(current_user)) -> list[dict]:
+    """The caller's meals, each with its recipes (see storage.list_meals)."""
+    return list_meals(owner=user)
+
+
+@app.post("/meals", status_code=201)
+def add_meal(body: MealRequest, user: str = Depends(current_user)) -> dict:
+    """Create an empty meal; recipes are added one by one afterwards."""
+    return create_meal(_meal_name(body), owner=user)
+
+
+@app.patch("/meals/{meal_id}")
+def patch_meal(meal_id: int, body: MealRequest,
+               user: str = Depends(current_user)) -> dict:
+    """Rename one of the caller's meals."""
+    try:
+        return rename_meal(meal_id, _meal_name(body), owner=user)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Meal not found.")
+
+
+@app.delete("/meals/{meal_id}")
+def remove_meal(meal_id: int, user: str = Depends(current_user)) -> dict:
+    """Delete a meal (the grouping only — its recipes stay in the cookbook)."""
+    if not delete_meal(meal_id, owner=user):
+        raise HTTPException(status_code=404, detail="Meal not found.")
+    return {"status": "deleted", "id": meal_id}
+
+
+# Membership is modelled as a resource of its own: PUT = "make sure this
+# recipe is in the meal", DELETE = "make sure it is not". Both are idempotent
+# (repeating them changes nothing), so a retried request can never double-add.
+@app.put("/meals/{meal_id}/recipes/{recipe_id}")
+def put_meal_recipe(meal_id: int, recipe_id: int,
+                    user: str = Depends(current_user)) -> dict:
+    """Add one of the caller's recipes to one of the caller's meals."""
+    try:
+        add_meal_recipe(meal_id, recipe_id, owner=user)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Meal or recipe not found.")
+    return {"status": "added", "meal_id": meal_id, "recipe_id": recipe_id}
+
+
+@app.delete("/meals/{meal_id}/recipes/{recipe_id}")
+def delete_meal_recipe(meal_id: int, recipe_id: int,
+                       user: str = Depends(current_user)) -> dict:
+    """Take a recipe out of a meal."""
+    try:
+        remove_meal_recipe(meal_id, recipe_id, owner=user)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Meal not found.")
+    return {"status": "removed", "meal_id": meal_id, "recipe_id": recipe_id}
 
 
 @app.post("/users", status_code=201)

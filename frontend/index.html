@@ -106,13 +106,29 @@
         <ol>
           <li>Paste an Instagram or TikTok link into <strong>Add a recipe</strong> and tap <strong>Import</strong> — the recipe is read for you.</li>
           <li>Even easier: share straight from Instagram or TikTok to the CookBook (see <strong>How to install</strong> for the one-time setup).</li>
-          <li>Or tap <strong>✎ Or create one yourself</strong> to type a recipe in, with an optional photo.</li>
+          <li>Or tap <strong>✎ Or create one yourself</strong> to type a recipe in, with an optional photo — taken on the spot with <strong>📷 Take photo</strong> or picked from your gallery.</li>
         </ol>
         <h3>🍳 Your recipes</h3>
         <ol>
           <li>Tap a recipe card to open its ingredients and steps; tap again to close.</li>
           <li><strong>✎</strong> edits a recipe, <strong>×</strong> deletes it, <strong>Watch Video</strong> opens the original post.</li>
           <li><strong>★</strong> marks a favorite. <strong>🔖</strong> puts it on your Up Next list — things you plan to cook soon.</li>
+        </ol>
+        <h3>🛒 Shopping list</h3>
+        <ol>
+          <li>Open a recipe and tap every ingredient you're <strong>missing</strong> — it gets highlighted.</li>
+          <li>Tap <strong>WhatsApp</strong> to send the list, or <strong>Copy</strong> to paste it anywhere. <strong>Clear</strong> unmarks everything.</li>
+        </ol>
+        <h3>▶ Cooking mode</h3>
+        <ol>
+          <li>Open a recipe and tap <strong>Start cooking</strong>: one big step at a time, with the next one previewed.</li>
+          <li><strong>Next step</strong> moves on, <strong>Back</strong> returns. The screen stays awake while you cook.</li>
+        </ol>
+        <h3>🍽 Meals</h3>
+        <ol>
+          <li>Open the <strong>Meals</strong> tab, name a meal (e.g. Friday dinner) and tick the recipes that belong to it.</li>
+          <li>Or tap <strong>🍽</strong> on any recipe card to drop it into a meal.</li>
+          <li>Inside a meal you can cook each recipe and send one shopping list for the whole meal.</li>
         </ol>
         <h3>🏷 Tags &amp; search</h3>
         <ol>
@@ -130,6 +146,14 @@
   </div>
 
   <main>
+    <!-- Two top-level views. Meals are a separate axis from tags, so they
+         get their own tab instead of another row of filter chips. -->
+    <nav id="view-tabs">
+      <button type="button" data-view="recipes" class="active">🍳 Recipes</button>
+      <button type="button" data-view="meals">🍽 Meals</button>
+    </nav>
+
+    <div id="view-recipes">
     <section id="import">
       <h2>Add a recipe</h2>
       <form id="import-form">
@@ -148,9 +172,11 @@
         <label>Steps (one per line)
           <textarea id="manual-steps" rows="8" dir="auto"></textarea>
         </label>
-        <label>Cover photo (optional)
-          <input id="manual-photo" type="file" accept="image/*" />
-        </label>
+        <!-- A div, not a label: clicking a label's text presses the first
+             button inside it. app.js mounts the camera/gallery widget here. -->
+        <div class="field">Cover photo (optional)
+          <div id="manual-photo-box"></div>
+        </div>
         <div class="edit-buttons">
           <button type="submit">Save recipe</button>
           <button type="button" id="manual-cancel">Cancel</button>
@@ -176,8 +202,66 @@
     <h2>Recipes</h2>
     <input type="search" id="search-box" placeholder="Search recipes…" dir="auto" />
     <div id="recipe-list">Loading…</div>
+    </div>
+
+    <div id="view-meals" hidden>
+      <h2>Plan a meal</h2>
+      <form id="new-meal-form">
+        <input id="new-meal-name" type="text" dir="auto" maxlength="60"
+               placeholder="Name it — e.g. Friday dinner" required />
+        <button type="submit">Create</button>
+      </form>
+      <div id="meal-list"></div>
+    </div>
   </main>
+
+  <!-- Meal picker: full-screen checklist of every recipe, for one meal. -->
+  <div id="meal-picker" hidden>
+    <div class="guide-inner">
+      <div class="guide-top">
+        <div>
+          <p class="picker-kicker">Choose recipes for</p>
+          <h2 id="meal-picker-title" dir="auto"></h2>
+        </div>
+        <button type="button" id="meal-picker-close">Done</button>
+      </div>
+      <input type="search" id="meal-picker-search" placeholder="Search recipes…" dir="auto" />
+      <div id="meal-picker-list"></div>
+    </div>
+  </div>
+
+  <!-- Cooking mode: one step at a time, the next one previewed beside it. -->
+  <div id="cook-mode" hidden>
+    <div class="cook-top">
+      <button type="button" id="cook-close" title="Exit cooking mode">×</button>
+      <h2 id="cook-title" dir="auto"></h2>
+      <button type="button" id="cook-ingredients-toggle">Ingredients</button>
+    </div>
+    <div class="cook-progress"><div id="cook-progress-bar"></div></div>
+    <ul id="cook-ingredients" hidden></ul>
+    <div class="cook-body">
+      <section class="cook-current">
+        <p id="cook-count"></p>
+        <p id="cook-step" dir="auto"></p>
+      </section>
+      <aside id="cook-next">
+        <p id="cook-next-label"></p>
+        <p id="cook-next-step" dir="auto"></p>
+      </aside>
+    </div>
+    <div class="cook-nav">
+      <button type="button" id="cook-back">Back</button>
+      <button type="button" id="cook-forward">Next step</button>
+    </div>
+  </div>
+
+  <!-- Order matters: helpers first, app.js last (it boots the page and calls
+       into the files above it). -->
   <script src="share-queue.js"></script>
+  <script src="ui-helpers.js"></script>
+  <script src="shopping.js"></script>
+  <script src="cook-mode.js"></script>
+  <script src="meals.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

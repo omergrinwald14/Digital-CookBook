@@ -536,6 +536,9 @@ def delete_user(owner: str) -> dict:
     client = _client()
     inbox = (client.table("shared_recipes").delete()
              .eq("to_owner", owner).execute())
+    # Meals carry an owner but no FK to anything that is deleted here, so
+    # nothing would cascade them away; their meal_recipes rows do cascade.
+    client.table("meals").delete().eq("owner", owner).execute()
     recipes = client.table("recipes").delete().eq("owner", owner).execute()
     tags = client.table("tags").delete().eq("owner", owner).execute()
     # Registry row last: its FK cascades erase the user from every friends
@@ -675,6 +678,119 @@ def resolve_share(share_id: int, *, owner: str, accept: bool) -> dict:
         {"status": "accepted" if accept else "dismissed"}
     ).eq("id", share_id).execute()
     return copied or {"status": "dismissed", "id": share_id}
+
+
+# ---- Meals: named groups of recipes ("Friday dinner") ----------------------
+# Two tables: meals (id, owner, name) and the join table meal_recipes
+# (meal_id, recipe_id, added_at). A join table is how a database stores a
+# many-to-many link — one meal holds many recipes AND one recipe can sit in
+# many meals — exactly like recipe_tags does for tags.
+
+def _flatten_meal(row: dict) -> dict:
+    """Turn PostgREST's nested embed into the shape the frontend reads.
+
+    In:  {..., "meal_recipes": [{"added_at": ..., "recipes": {...}}, ...]}
+    Out: {..., "recipes": [{...}, ...]}  — in the order they were added.
+
+    Pure (no database), so it is unit-testable on its own. A join row whose
+    recipe is missing is skipped rather than surfacing a null to the UI.
+    """
+    links = sorted(row.pop("meal_recipes", None) or [],
+                   key=lambda link: link.get("added_at") or "")
+    row["recipes"] = [link["recipes"] for link in links if link.get("recipes")]
+    return row
+
+
+def _owned_meal(client: Client, meal_id: int, owner: str) -> None:
+    """Raise LookupError unless MEAL_ID belongs to OWNER (-> 404 upstream)."""
+    found = (client.table("meals").select("id")
+             .eq("id", meal_id).eq("owner", owner).limit(1).execute())
+    if not found.data:
+        raise LookupError(f"meal {meal_id} not found")
+
+
+@_synchronized
+def list_meals(*, owner: str) -> list[dict]:
+    """OWNER's meals, newest first, each carrying its full recipe rows.
+
+    Full rows (ingredients + steps included) so the Meals screen can open a
+    recipe, start cooking mode and build a shopping list without asking the
+    server again. One query: the recipes come along as an embed.
+    """
+    rows = (
+        _client().table("meals")
+        .select("id, name, created_at, meal_recipes(added_at, recipes(*))")
+        .eq("owner", owner)
+        .order("created_at", desc=True)
+        .execute()
+    ).data
+    return [_flatten_meal(r) for r in rows]
+
+
+@_synchronized
+def create_meal(name: str, *, owner: str) -> dict:
+    """Insert an empty meal for OWNER and return it (with "recipes": []).
+
+    Duplicate names are allowed on purpose: "Friday dinner" happens every week.
+    """
+    row = (_client().table("meals")
+           .insert({"name": name, "owner": owner}).execute()).data[0]
+    return {"id": row["id"], "name": row["name"],
+            "created_at": row["created_at"], "recipes": []}
+
+
+@_synchronized
+def rename_meal(meal_id: int, name: str, *, owner: str) -> dict:
+    """Rename one of OWNER's meals; LookupError if it isn't theirs."""
+    result = (_client().table("meals").update({"name": name})
+              .eq("id", meal_id).eq("owner", owner).execute())
+    if not result.data:
+        raise LookupError(f"meal {meal_id} not found")
+    row = result.data[0]
+    return {"id": row["id"], "name": row["name"]}
+
+
+@_synchronized
+def delete_meal(meal_id: int, *, owner: str) -> bool:
+    """Delete one of OWNER's meals; True if a row actually went.
+
+    Only the grouping is deleted: meal_recipes rows cascade away with the
+    meal, the recipes themselves are untouched.
+    """
+    result = (_client().table("meals").delete()
+              .eq("id", meal_id).eq("owner", owner).execute())
+    return bool(result.data)
+
+
+@_synchronized
+def add_meal_recipe(meal_id: int, recipe_id: int, *, owner: str) -> None:
+    """Put one of OWNER's recipes into one of OWNER's meals.
+
+    BOTH sides are ownership-checked: the join row itself has no owner
+    column, so without these checks a guessed id could attach someone else's
+    recipe (and list_meals would then hand its contents over). Upsert makes a
+    repeat add a harmless no-op.
+    """
+    client = _client()
+    _owned_meal(client, meal_id, owner)
+    recipe = (client.table("recipes").select("id")
+              .eq("id", recipe_id).eq("owner", owner).limit(1).execute())
+    if not recipe.data:
+        raise LookupError(f"recipe {recipe_id} not found")
+    client.table("meal_recipes").upsert(
+        {"meal_id": meal_id, "recipe_id": recipe_id},
+        on_conflict="meal_id,recipe_id",
+        ignore_duplicates=True,      # keep the original added_at (the ordering)
+    ).execute()
+
+
+@_synchronized
+def remove_meal_recipe(meal_id: int, recipe_id: int, *, owner: str) -> None:
+    """Take a recipe out of one of OWNER's meals (not-in-it is a no-op)."""
+    client = _client()
+    _owned_meal(client, meal_id, owner)
+    (client.table("meal_recipes").delete()
+     .eq("meal_id", meal_id).eq("recipe_id", recipe_id).execute())
 
 
 # Direct test:  py app/storage.py  — inserts one sample recipe.
