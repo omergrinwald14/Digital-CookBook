@@ -104,9 +104,9 @@
       <section>
         <h3>➕ Add recipes</h3>
         <ol>
-          <li>Paste an Instagram or TikTok link into <strong>Add a recipe</strong> and tap <strong>Import</strong> — the recipe is read for you.</li>
+          <li>Tap <strong>＋ Add recipe</strong>, paste an Instagram or TikTok link and tap <strong>Import</strong> — the recipe is read for you.</li>
           <li>Even easier: share straight from Instagram or TikTok to the CookBook (see <strong>How to install</strong> for the one-time setup).</li>
-          <li>Or tap <strong>✎ Or create one yourself</strong> to type a recipe in, with an optional photo — taken on the spot with <strong>📷 Take photo</strong> or picked from your gallery.</li>
+          <li>Or, in the same panel, tap <strong>✎ Or create one yourself</strong> to type a recipe in, with an optional photo — taken on the spot with <strong>📷 Take photo</strong> or picked from your gallery.</li>
         </ol>
         <h3>🍳 Your recipes</h3>
         <ol>
@@ -134,7 +134,7 @@
         <ol>
           <li>Tap <strong>+</strong> on a recipe card to tag it (pick an existing tag or make a new one).</li>
           <li>Tap the tag pills at the top to filter your recipes — you can combine several. <strong>More ▾</strong> shows all your tags.</li>
-          <li>The search box finds recipes by title, ingredient or tag.</li>
+          <li><strong>🔍 Search</strong> finds recipes by title, ingredient or tag. To create a tag without a recipe, open <strong>More ▾</strong> and tap <strong>＋ New tag</strong>.</li>
         </ol>
         <h3>↗ Share with family and friends</h3>
         <ol>
@@ -154,13 +154,21 @@
     </nav>
 
     <div id="view-recipes">
-    <section id="import">
-      <h2>Add a recipe</h2>
+    <!-- Progressive disclosure: adding and searching are occasional actions,
+         so each is ONE button here and its input appears only on demand.
+         The recipes themselves start right under this row. -->
+    <div id="recipe-actions">
+      <button type="button" id="add-toggle">＋ Add recipe</button>
+      <button type="button" id="search-toggle">🔍 Search</button>
+    </div>
+    <input type="search" id="search-box" placeholder="Search recipes…" dir="auto" hidden />
+    <!-- Outside the panel below, so "Added: …" stays visible after it closes. -->
+    <p id="import-status" hidden></p>
+    <section id="import" hidden>
       <form id="import-form">
         <input id="import-url" type="url" placeholder="Paste an Instagram or TikTok link…" required />
         <button type="submit">Import</button>
       </form>
-      <p id="import-status" hidden></p>
       <button type="button" id="manual-toggle">✎ Or create one yourself</button>
       <form id="manual-form" class="edit-form" hidden>
         <label>Title
@@ -191,16 +199,14 @@
       <div id="shared-list"></div>
     </section>
 
-    <h2>Tags</h2>
     <ul id="tag-list">Loading…</ul>
 
-    <form id="add-tag-form">
+    <!-- Revealed by the "＋ New tag" chip (shown under More ▾). -->
+    <form id="add-tag-form" hidden>
       <input id="new-tag-name" type="text" placeholder="New tag" maxlength="40" />
       <button type="submit">Add</button>
     </form>
 
-    <h2>Recipes</h2>
-    <input type="search" id="search-box" placeholder="Search recipes…" dir="auto" />
     <div id="recipe-list">Loading…</div>
     </div>
 

@@ -169,6 +169,24 @@ async function loadTags() {
       chip.classList.add("extra", "tag-filter");
       list.appendChild(chip);
     }
+    // Creating a bare tag is rare (cards have their own "+ New tag…"), so
+    // its form hides behind this chip, itself tucked under More ▾.
+    const newTag = document.createElement("li");
+    newTag.textContent = "＋ New tag";
+    newTag.className = "extra new-tag-chip";
+    newTag.addEventListener("click", () => {
+      const form = document.getElementById("add-tag-form");
+      form.hidden = !form.hidden;
+      if (!form.hidden) document.getElementById("new-tag-name").focus();
+    });
+    // Up in the control row, right after Untagged — not lost behind the tags.
+    untagged.after(newTag);
+    // An invisible full-width item: in a wrapping flex row it forces
+    // everything after it onto a new line, so the user's own tags always
+    // start on their own row beneath the controls.
+    const rowBreak = document.createElement("li");
+    rowBreak.className = "extra row-break";
+    newTag.after(rowBreak);
     // Progressive disclosure: chips past the three pinned ones hide behind
     // a More/Less toggle so tags don't swallow the screen.
     const toggle = document.createElement("li");
@@ -177,7 +195,11 @@ async function loadTags() {
       const collapsed = list.classList.toggle("collapsed");
       toggle.textContent = collapsed ? "More ▾" : "Less ▴";
     });
-    list.appendChild(toggle);
+    toggle.className = "more-toggle";
+    // Placed right after the three pinned chips, BEFORE the extras: the
+    // extras then unfold after it, so the button stays exactly where the
+    // finger already is and a second tap folds them again.
+    list.insertBefore(toggle, untagged);
     list.classList.add("collapsed");
   } catch (err) {
     list.textContent = `Could not load tags: ${err.message}`;
@@ -242,6 +264,34 @@ function applySearch(recipes) {
 // Re-filter on every keystroke — pure in-browser work, so it's instant.
 document.getElementById("search-box").addEventListener("input",
   () => renderRecipes(applySearch(recipesCache)));
+
+// The action row: "＋ Add recipe" and "🔍 Search" each reveal their input on
+// demand, so the recipe list starts near the top of the screen. Each button
+// stays highlighted while its panel is open, so it is obvious what a second
+// tap will close.
+const addToggle = document.getElementById("add-toggle");
+const addPanel = document.getElementById("import");
+function setAddPanel(open) {
+  addPanel.hidden = !open;
+  addToggle.classList.toggle("active", open);
+  if (open) document.getElementById("import-url").focus();
+}
+addToggle.addEventListener("click", () => setAddPanel(addPanel.hidden));
+
+const searchToggle = document.getElementById("search-toggle");
+searchToggle.addEventListener("click", () => {
+  const box = document.getElementById("search-box");
+  box.hidden = !box.hidden;
+  searchToggle.classList.toggle("active", !box.hidden);
+  if (!box.hidden) {
+    box.focus();
+  } else if (box.value) {
+    // A hidden box must not keep filtering: nothing on screen would explain
+    // why recipes are missing.
+    box.value = "";
+    renderRecipes(applySearch(recipesCache));
+  }
+});
 
 // Split a textarea into trimmed, non-empty lines (edit form + manual entry).
 const toLines = (s) => s.split("\n").map((l) => l.trim()).filter(Boolean);
@@ -882,6 +932,7 @@ async function addTag(event) {
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     input.value = "";               // clear the box
+    document.getElementById("add-tag-form").hidden = true;   // done — fold it away
     await loadTags();               // repaint chips, now including the new one
   } catch (err) {
     alert(`Could not add tag: ${err.message}`);
@@ -912,6 +963,7 @@ async function importRecipe(event) {
     const recipe = await res.json();
     input.value = "";
     status.textContent = `Added: ${recipe.title || "Untitled"}`;
+    setAddPanel(false);                          // done — back to the recipes
     await loadRecipes();                         // show the new recipe
   } catch (err) {
     status.textContent = `Import failed: ${err.message}`;
@@ -973,6 +1025,7 @@ manualForm.addEventListener("submit", async (e) => {
     manualForm.reset();
     manualPhoto.reset();
     manualForm.hidden = true;
+    setAddPanel(false);
     status.hidden = false;
     status.textContent = `Added: ${title}`;
     await loadRecipes();
