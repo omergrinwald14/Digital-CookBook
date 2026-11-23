@@ -8,7 +8,9 @@ requests
 python-dotenv
 
 # Google Gemini SDK — parses captions into structured recipe data.
-google-genai
+# Pinned to one major version: 3.0 silently changed the default API version
+# and broke every import on the next deploy.
+google-genai>=3,<4
 
 # Web framework + ASGI server that expose the backend as an HTTP API.
 fastapi

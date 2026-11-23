@@ -29,7 +29,12 @@ def _client():
     """Return the shared Gemini client, creating it once on first use."""
     global _client_instance
     if _client_instance is None:
-        _client_instance = genai.Client(api_key=GEMINI_API_KEY)
+        # JSON mode exists only on v1beta; google-genai 3.x defaults to v1,
+        # which rejects response_mime_type with a 400.
+        _client_instance = genai.Client(
+            api_key=GEMINI_API_KEY,
+            http_options=types.HttpOptions(api_version="v1beta"),
+        )
     return _client_instance
 
 
