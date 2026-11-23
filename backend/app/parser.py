@@ -12,12 +12,15 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 MODEL = "gemini-2.5-flash"  # fast, free-tier-friendly model
+# Each model has its OWN free-tier quota (2.5-flash: 20 requests/day), so when
+# the main one is used up, the lighter model can still take the request.
+FALLBACK_MODEL = "gemini-2.5-flash-lite"
 
 # Module-level singleton, same reasoning as storage.py's Supabase client:
 # building a fresh client per call re-pays the TLS handshake and connection
@@ -89,11 +92,16 @@ def parse_recipe(caption: str, tags: list[str]) -> dict:
         # No caption to parse → follow the no-tags/null fallback rule.
         return {"title": None, "ingredients": None, "steps": None, "tags": []}
 
-    response = _client().models.generate_content(
-        model=MODEL,
-        contents=_build_prompt(caption, tags),
-        config=types.GenerateContentConfig(response_mime_type="application/json"),
-    )
+    prompt = _build_prompt(caption, tags)
+    config = types.GenerateContentConfig(response_mime_type="application/json")
+    try:
+        response = _client().models.generate_content(
+            model=MODEL, contents=prompt, config=config)
+    except errors.ClientError as e:
+        if e.code != 429:      # only "quota used up" earns a second try
+            raise
+        response = _client().models.generate_content(
+            model=FALLBACK_MODEL, contents=prompt, config=config)
 
     # Malformed model output (bad/empty JSON, or JSON that isn't an object)
     # degrades to the same null/"Unknown" fallback as a missing caption —
