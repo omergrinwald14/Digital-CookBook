@@ -2,7 +2,7 @@
 importScripts("share-queue.js");
 
 const API_BASE = "https://digital-cookbook-api.onrender.com"; // matches app.js
-const SW_VERSION = "v6 drain-all-shares"; // bump on SW changes; readable at /sw-version
+const SW_VERSION = "v7 keep-rejected-shares"; // bump on SW changes; readable at /sw-version
 
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
@@ -37,6 +37,7 @@ function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 async function drainShareQueue() {
   let stuck = 0;
   for (const share of await listShares()) {
+    if (share.failed) continue;   // rejected earlier: kept for the app to show
     let delivered = false;
     for (const delay of RETRY_DELAYS_MS) {
       if (delay) await sleep(delay); // give a cold server time to wake
@@ -51,11 +52,17 @@ async function drainShareQueue() {
           },
           body: JSON.stringify({ url: share.url }),
         });
-        // 4xx = bad URL, retrying can't fix it — drop the entry.
-        // ok = saved (idempotent, so a re-run is harmless) — drop it too.
+        // ok  = saved (idempotent, so a re-run is harmless) — drop the entry.
+        // 4xx = the server rejected the link; retrying can't fix it. Keep it,
+        //       marked failed with the server's reason, so the app can say so.
         // 5xx = transient server trouble — wait, then retry.
-        if (res.ok || (res.status >= 400 && res.status < 500)) {
+        if (res.ok) {
           await removeShare(share.id);
+          delivered = true;
+          break;
+        }
+        if (res.status >= 400 && res.status < 500) {
+          await markShareFailed(share, await rejectionReason(res));
           delivered = true;
           break;
         }

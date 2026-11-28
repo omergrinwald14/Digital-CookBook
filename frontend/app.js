@@ -1111,39 +1111,76 @@ function renderOffer(offer) {
 // unreliable: Chrome stops retrying after ~3 attempts, and each attempt can
 // die against Render's ~50s cold start — entries then sit in IndexedDB
 // forever. Opening the app is now the guaranteed delivery path; the SW sync
-// remains as a best-effort fast path. Mirrors sw.js's drop rule:
-// ok or 4xx (retrying can't fix a bad URL) -> remove; 5xx/network -> keep.
+// remains as a best-effort fast path. Mirrors sw.js's rule:
+// ok -> remove; 4xx -> keep, marked failed with the reason; 5xx/network -> keep.
 async function drainPendingShares() {
   const banner = document.getElementById("pending-shares");
   let shares;
   try { shares = await listShares(); } catch { return; }  // IndexedDB unavailable
-  if (!shares.length) return;
-  banner.hidden = false;
-  let saved = 0;
-  for (const [i, share] of shares.entries()) {
-    banner.textContent = `Saving ${shares.length} pending shared recipe(s)… (${i} done)`;
-    try {
-      // Queued entries carry who shared them; that owner wins over whoever
-      // is logged in now (someone else may have opened the app since).
-      const res = await apiFetch("/import", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(share.owner ? { "X-User": share.owner } : {}),
-        },
-        body: JSON.stringify({ url: share.url }),
-      });
-      if (res.ok || (res.status >= 400 && res.status < 500)) {
-        await removeShare(share.id);
-        if (res.ok) saved++;
-      }
-    } catch { /* offline / server down — keep queued for the next visit */ }
+  const pending = shares.filter((s) => !s.failed);
+  if (pending.length) {
+    banner.hidden = false;
+    let saved = 0;
+    let rejected = 0;
+    for (const [i, share] of pending.entries()) {
+      banner.textContent = `Saving ${pending.length} pending shared recipe(s)… (${i} done)`;
+      try {
+        // Queued entries carry who shared them; that owner wins over whoever
+        // is logged in now (someone else may have opened the app since).
+        const res = await apiFetch("/import", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(share.owner ? { "X-User": share.owner } : {}),
+          },
+          body: JSON.stringify({ url: share.url }),
+        });
+        if (res.ok) {
+          await removeShare(share.id);
+          saved++;
+        } else if (res.status >= 400 && res.status < 500) {
+          await markShareFailed(share, await rejectionReason(res));
+          rejected++;
+        }
+      } catch { /* offline / server down — keep queued for the next visit */ }
+    }
+    // Rejections get their own banner below, so this one only reports
+    // what was saved and what is still waiting for a retry.
+    const waiting = pending.length - saved - rejected;
+    const parts = [];
+    if (saved) parts.push(`Saved ${saved} shared recipe(s).`);
+    if (waiting) parts.push(`${waiting} will retry on the next visit.`);
+    banner.textContent = parts.join(" ");
+    banner.hidden = !parts.length;
+    setTimeout(() => { banner.hidden = true; }, 6000);
+    if (saved) await loadRecipes();
   }
-  banner.textContent = saved
-    ? `Saved ${saved} shared recipe(s).`
-    : "Pending shares could not be saved — will retry on the next visit.";
-  setTimeout(() => { banner.hidden = true; }, 6000);
-  if (saved) await loadRecipes();
+  await showRejectedShares();
+}
+
+// Shares the server rejected (a bad or unsupported link), shown until
+// dismissed. The server's reason names the link itself, so a failed share
+// says exactly what arrived instead of vanishing.
+async function showRejectedShares() {
+  const banner = document.getElementById("rejected-shares");
+  let rejected;
+  try { rejected = (await listShares()).filter((s) => s.failed); } catch { return; }
+  if (!rejected.length) { banner.hidden = true; return; }
+  const msg = document.createElement("span");
+  // textContent, never innerHTML: the reason quotes a link from outside.
+  msg.textContent = `Couldn't import ${rejected.length} shared link(s): `
+    + rejected.map((s) => s.error).join(" · ");
+  const dismiss = document.createElement("button");
+  dismiss.type = "button";
+  dismiss.textContent = "Dismiss";
+  dismiss.addEventListener("click", async () => {
+    for (const s of rejected) {
+      try { await removeShare(s.id); } catch { /* already gone */ }
+    }
+    banner.hidden = true;
+  });
+  banner.replaceChildren(msg, dismiss);
+  banner.hidden = false;
 }
 
 // Boot: tags first so card pickers have the cache; recipes render

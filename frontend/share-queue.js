@@ -56,3 +56,24 @@ async function removeShare(id) {
   );
   db.close();
 }
+
+// Keep a share the server REJECTED (4xx), with its reason, instead of deleting
+// it. Rejections used to be deleted silently, so a failed share just vanished
+// and nobody could tell why. Retrying can't fix a rejected link, so both
+// drains skip entries marked failed; the app shows them until dismissed.
+async function markShareFailed(share, error) {
+  const db = await openShareDb();
+  await idbDone(
+    db.transaction(SHARE_STORE, "readwrite")
+      .objectStore(SHARE_STORE)
+      .put({ ...share, failed: true, error })
+  );
+  db.close();
+}
+
+// The server's reason for a 4xx (FastAPI sends {"detail": "..."}), else the
+// bare status code.
+async function rejectionReason(res) {
+  try { return (await res.json()).detail || `HTTP ${res.status}`; }
+  catch { return `HTTP ${res.status}`; }
+}

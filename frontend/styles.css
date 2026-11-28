@@ -91,6 +91,11 @@ main { padding:1rem; max-width:600px; margin:0 auto; }
 .chip-delete:hover { opacity:1; }
 #search-box { width:100%; padding:.5rem .6rem; border:1px solid #e0d8cf; border-radius:8px; margin:.6rem 0 0; font:inherit; }
 #pending-shares { background:#fdf3e7; border:1px solid #e8c9a8; border-radius:8px; padding:.5rem .8rem; font-size:.9rem; }
+/* Same red family as the delete button: something went wrong. word-break
+   because the reason quotes a long link that would otherwise overflow. */
+#rejected-shares { background:#fdf1f0; border:1px solid #f0c9c5; color:#8a1f17; border-radius:8px; padding:.5rem .8rem; font-size:.9rem; display:flex; align-items:center; justify-content:space-between; gap:.6rem; word-break:break-word; }
+#rejected-shares[hidden] { display:none; }
+#rejected-shares button { flex-shrink:0; background:none; color:#8a1f17; border:1px solid #e3a9a3; border-radius:999px; padding:.2rem .7rem; cursor:pointer; font:inherit; font-size:.8rem; }
 /* align-items:start — expanding one card must not stretch its row-mates. */
 #recipe-list { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px,1fr)); gap:1rem; margin-top:1rem; align-items:start; }
 .recipe-card { background:#fff; border:1px solid #e0d8cf; border-radius:12px; overflow:hidden; display:flex; flex-direction:column; }
