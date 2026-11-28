@@ -14,6 +14,8 @@ from app.instagram import normalize_instagram_url
 from app.parser import parse_recipe
 from app.tiktok import fetch_caption as fetch_tiktok
 from app.tiktok import normalize_tiktok_url
+from app.youtube import fetch_caption as fetch_youtube
+from app.youtube import normalize_youtube_url
 from app.storage import (
     add_friend,
     add_meal_recipe,
@@ -444,24 +446,29 @@ def remove_user(email: str, user: str = Depends(current_user)) -> dict:
     return {"status": "deleted", "user": email, **counts}
 
 
-def _resolve_source(raw_url: str):
-    """Map a raw shared link to (canonical URL, fetcher).
+# Every supported source as (normalizer, fetcher). A normalizer "claims" a
+# URL by returning its canonical form, or declines with ValueError. Adding a
+# source = one more row here, nothing else.
+_SOURCES = (
+    (normalize_instagram_url, fetch_instagram),
+    (normalize_tiktok_url, fetch_tiktok),
+    (normalize_youtube_url, fetch_youtube),
+)
 
-    One place per supported source: try each normalizer until one claims the
-    URL. Adding a future source = one more except-branch here, nothing else.
-    """
-    try:
-        return normalize_instagram_url(raw_url), fetch_instagram
-    except ValueError:
+
+def _resolve_source(raw_url: str):
+    """Map a raw shared link to (canonical URL, fetcher); first match wins."""
+    for normalize, fetch in _SOURCES:
         try:
-            return normalize_tiktok_url(raw_url), fetch_tiktok
+            return normalize(raw_url), fetch
         except ValueError:
-            raise ValueError(f"Not an Instagram or TikTok post link: {raw_url!r}")
+            continue
+    raise ValueError(f"Not an Instagram, TikTok or YouTube link: {raw_url!r}")
 
 
 @app.post("/import")
 def import_recipe(body: ImportRequest, user: str = Depends(current_user)) -> dict:
-    """Fetch an Instagram/TikTok post and return it as a structured recipe.
+    """Fetch an Instagram/TikTok/YouTube post and return it as a structured recipe.
 
     Pipeline: URL -> fetch (Apify) -> parse_recipe (Gemini) -> recipe.
     """

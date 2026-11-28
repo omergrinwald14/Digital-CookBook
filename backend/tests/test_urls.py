@@ -7,7 +7,9 @@ per post, or the same reel saves twice under different-looking links.
 import pytest
 
 from app.instagram import normalize_instagram_url
+from app.main import _resolve_source
 from app.tiktok import normalize_tiktok_url
+from app.youtube import normalize_youtube_url
 
 
 @pytest.mark.parametrize("raw, expected", [
@@ -81,3 +83,53 @@ def test_tiktok_same_post_under_different_usernames_is_one_url():
 def test_tiktok_rejects_non_posts(raw):
     with pytest.raises(ValueError):
         normalize_tiktok_url(raw)
+
+
+YT = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+
+@pytest.mark.parametrize("raw", [
+    "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    # what the YouTube app's Share button hands out, with its ?si= tracker
+    "https://youtu.be/dQw4w9WgXcQ?si=Ab12Cd34Ef56",
+    "https://youtube.com/shorts/dQw4w9WgXcQ?feature=share",
+    "https://m.youtube.com/watch?v=dQw4w9WgXcQ&t=42s",
+    # v= is not always the first query param
+    "https://www.youtube.com/watch?list=PL123&v=dQw4w9WgXcQ",
+    "https://www.youtube.com/embed/dQw4w9WgXcQ",
+    "https://www.youtube.com/live/dQw4w9WgXcQ",
+])
+def test_youtube_variants_all_collapse_to_one_url(raw):
+    """Every shape of the same video is ONE recipe (the dedupe guarantee)."""
+    assert normalize_youtube_url(raw) == YT
+
+
+@pytest.mark.parametrize("raw", [
+    "", None, "not a url",
+    "https://www.youtube.com/@somechef",            # a channel, not a video
+    "https://www.youtube.com/playlist?list=PL123",  # a playlist, no video id
+    "https://youtu.be/short",                       # id must be 11 chars
+    "https://www.instagram.com/reel/ABC123/",       # wrong site
+])
+def test_youtube_rejects_non_videos(raw):
+    with pytest.raises(ValueError):
+        normalize_youtube_url(raw)
+
+
+@pytest.mark.parametrize("raw, expected_url, source_module", [
+    ("https://www.instagram.com/reels/ABC123/",
+     "https://www.instagram.com/reel/ABC123/", "app.instagram"),
+    ("https://www.tiktok.com/@chef/video/7658754150695488775",
+     "https://www.tiktok.com/@/video/7658754150695488775", "app.tiktok"),
+    ("https://youtu.be/dQw4w9WgXcQ?si=x", YT, "app.youtube"),
+])
+def test_resolve_source_routes_each_link_to_its_fetcher(raw, expected_url, source_module):
+    """/import's dispatcher: right canonical URL AND the matching fetcher."""
+    url, fetch = _resolve_source(raw)
+    assert url == expected_url
+    assert fetch.__module__ == source_module
+
+
+def test_resolve_source_rejects_unsupported_sites():
+    with pytest.raises(ValueError):
+        _resolve_source("https://example.com/recipe/123")
