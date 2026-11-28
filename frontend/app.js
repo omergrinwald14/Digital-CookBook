@@ -1183,6 +1183,32 @@ document.getElementById("user-menu-switch").addEventListener("click", () => {
   location.reload();
 });
 
+// Share the app itself (not a recipe): the phone's native share sheet when
+// the browser has one (Web Share API — feature detection, not browser
+// sniffing), else copy the link. location.origin, not a hard-coded address,
+// so the link is always the site the person is actually using.
+const shareAppBtn = document.getElementById("share-app");
+const SHARE_APP_LABEL = shareAppBtn.textContent;
+shareAppBtn.addEventListener("click", async () => {
+  const url = location.origin + "/";
+  if (navigator.share) {
+    try {
+      await navigator.share({
+        title: "Digital CookBook",
+        text: "My recipe book — save recipes from Instagram, TikTok, YouTube and Facebook:",
+        url,
+      });
+      return;
+    } catch (e) {
+      if (e.name === "AbortError") return;   // they closed the share sheet
+    }
+  }
+  // No share sheet (most desktops) or it failed: copy the link instead.
+  const ok = await copyText(url);
+  shareAppBtn.textContent = ok ? "✓ Link copied" : "Copy failed";
+  setTimeout(() => { shareAppBtn.textContent = SHARE_APP_LABEL; }, 2000);
+});
+
 // 5-3f: erase everything belonging to the signed-in user. The backend refuses
 // to delete anyone else (403 unless X-User matches), so the damage is bounded
 // to the person clicking — but for them it is total and there is no undo.
