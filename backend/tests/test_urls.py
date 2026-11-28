@@ -6,6 +6,8 @@ per post, or the same reel saves twice under different-looking links.
 """
 import pytest
 
+from app import facebook
+from app.facebook import normalize_facebook_url
 from app.instagram import normalize_instagram_url
 from app.main import _resolve_source
 from app.tiktok import normalize_tiktok_url
@@ -116,12 +118,64 @@ def test_youtube_rejects_non_videos(raw):
         normalize_youtube_url(raw)
 
 
+FB = "https://www.facebook.com/reel/1541791004655979/"
+
+
+@pytest.mark.parametrize("raw", [
+    "https://www.facebook.com/reel/1541791004655979/",
+    "https://www.facebook.com/reel/1541791004655979",
+    "https://m.facebook.com/reel/1541791004655979/",
+    # what a resolved share link lands on: tracking params must not create
+    # a second "different" reel
+    "https://www.facebook.com/reel/1541791004655979/?rdid=BXPvkcb2vgRFvMpi"
+    "&share_url=https%3A%2F%2Fwww.facebook.com%2Fshare%2Fr%2F1BnE1KpT5L%2F",
+])
+def test_facebook_reel_variants_all_collapse_to_one_url(raw):
+    assert normalize_facebook_url(raw) == FB
+
+
+class _FakeRedirect:
+    """Stands in for requests' response: only .url and .close() are used."""
+    def __init__(self, url):
+        self.url = url
+
+    def close(self):
+        pass
+
+
+def test_facebook_share_link_resolves_through_its_redirect(monkeypatch):
+    """The Share button's /share/r/ code is followed to the real reel id."""
+    landed = FB + "?rdid=abc&share_url=x"
+    monkeypatch.setattr(facebook.requests, "get", lambda *a, **k: _FakeRedirect(landed))
+    assert normalize_facebook_url("https://www.facebook.com/share/r/1BnE1KpT5L/") == FB
+
+
+def test_facebook_share_link_that_lands_elsewhere_is_rejected(monkeypatch):
+    """A login wall (or any non-reel page) must not be saved as a recipe."""
+    monkeypatch.setattr(facebook.requests, "get",
+                        lambda *a, **k: _FakeRedirect("https://www.facebook.com/login/"))
+    with pytest.raises(ValueError):
+        normalize_facebook_url("https://www.facebook.com/share/r/1BnE1KpT5L/")
+
+
+@pytest.mark.parametrize("raw", [
+    "", None, "not a url",
+    "https://www.facebook.com/somechef",                 # a profile, not a reel
+    "https://www.facebook.com/somechef/videos/123456/",  # videos: not yet supported
+    "https://www.instagram.com/reel/ABC123/",            # wrong site
+])
+def test_facebook_rejects_non_reels(raw):
+    with pytest.raises(ValueError):
+        normalize_facebook_url(raw)
+
+
 @pytest.mark.parametrize("raw, expected_url, source_module", [
     ("https://www.instagram.com/reels/ABC123/",
      "https://www.instagram.com/reel/ABC123/", "app.instagram"),
     ("https://www.tiktok.com/@chef/video/7658754150695488775",
      "https://www.tiktok.com/@/video/7658754150695488775", "app.tiktok"),
     ("https://youtu.be/dQw4w9WgXcQ?si=x", YT, "app.youtube"),
+    ("https://m.facebook.com/reel/1541791004655979/?rdid=x", FB, "app.facebook"),
 ])
 def test_resolve_source_routes_each_link_to_its_fetcher(raw, expected_url, source_module):
     """/import's dispatcher: right canonical URL AND the matching fetcher."""

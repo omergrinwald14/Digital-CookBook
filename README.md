@@ -1,6 +1,6 @@
 # Digital CookBook
 
-Turn Instagram, TikTok and YouTube cooking videos into a browsable, tagged recipe book.
+Turn Instagram, TikTok, YouTube and Facebook cooking videos into a browsable, tagged recipe book.
 
 See a reel you like → tap **Share** → the app fetches the caption, asks an LLM to pull
 out the title, ingredients (with quantities) and steps, and saves it with a link back to
@@ -13,7 +13,7 @@ Built as a learning project, in small reviewed steps.
 
 ## Features
 
-- **Import from a link** — Instagram reels, TikTok and YouTube videos; the caption is parsed into
+- **Import from a link** — Instagram reels, TikTok and YouTube videos, Facebook reels; the caption is parsed into
   structured ingredients and steps. Unreadable or caption-less posts are still saved,
   just with empty fields.
 - **Add your own** — type a recipe by hand and attach a photo, no video needed.
@@ -32,7 +32,7 @@ Built as a learning project, in small reviewed steps.
 | Layer | Tech | Why |
 |---|---|---|
 | Backend API | Python 3, FastAPI, uvicorn | the import pipeline + REST endpoints |
-| Video metadata | [Apify](https://apify.com) Instagram / TikTok scrapers; YouTube Data API v3 | Apify handles logins and cookies; YouTube's official API is free |
+| Video metadata | [Apify](https://apify.com) Instagram / TikTok / Facebook scrapers; YouTube Data API v3 | Apify handles logins and cookies; YouTube's official API is free |
 | Parsing | Google Gemini (`gemini-2.5-flash`) | caption + tag list → structured recipe JSON |
 | Database + storage | Supabase (Postgres + object storage) | recipes, tags, users, thumbnails |
 | Frontend | Vanilla HTML/CSS/JS, PWA + service worker | no build step, installable on phones |
@@ -41,7 +41,7 @@ Built as a learning project, in small reviewed steps.
 ## How it works
 
 ```
-Instagram / TikTok / YouTube URL  (Share sheet, or pasted into the app)
+Instagram / TikTok / YouTube / Facebook URL  (Share sheet, or pasted into the app)
         │
         ▼
   FastAPI backend
@@ -62,6 +62,7 @@ backend/
     instagram.py  Instagram URL → caption + thumbnail (Apify)
     tiktok.py     same, for TikTok
     youtube.py    same, for YouTube (official Data API, not Apify)
+    facebook.py   same, for Facebook reels (Apify)
     parser.py     Gemini prompt + JSON parsing into a recipe
     storage.py    every Supabase read/write lives here
   requirements.txt

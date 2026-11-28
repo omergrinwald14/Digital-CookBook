@@ -9,6 +9,8 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from app.facebook import fetch_caption as fetch_facebook
+from app.facebook import normalize_facebook_url
 from app.instagram import fetch_caption as fetch_instagram
 from app.instagram import normalize_instagram_url
 from app.parser import parse_recipe
@@ -453,6 +455,7 @@ _SOURCES = (
     (normalize_instagram_url, fetch_instagram),
     (normalize_tiktok_url, fetch_tiktok),
     (normalize_youtube_url, fetch_youtube),
+    (normalize_facebook_url, fetch_facebook),
 )
 
 
@@ -463,12 +466,12 @@ def _resolve_source(raw_url: str):
             return normalize(raw_url), fetch
         except ValueError:
             continue
-    raise ValueError(f"Not an Instagram, TikTok or YouTube link: {raw_url!r}")
+    raise ValueError(f"Not an Instagram, TikTok, YouTube or Facebook link: {raw_url!r}")
 
 
 @app.post("/import")
 def import_recipe(body: ImportRequest, user: str = Depends(current_user)) -> dict:
-    """Fetch an Instagram/TikTok/YouTube post and return it as a structured recipe.
+    """Fetch an Instagram/TikTok/YouTube/Facebook post and return it as a structured recipe.
 
     Pipeline: URL -> fetch (Apify) -> parse_recipe (Gemini) -> recipe.
     """
